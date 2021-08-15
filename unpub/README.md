@@ -1,7 +1,6 @@
 # Unpub
 
-[![pub](https://img.shields.io/pub/v/unpub.svg)](https://pub.dev/packages/unpub)
-[![test](https://github.com/bytedance/unpub/workflows/test/badge.svg)](https://github.com/bytedance/unpub/actions?query=workflow:test)
+[![pub](https://img.shields.io/pub/v/unpub.svg)](https://pub.dev/packages/unpub) [![test](https://github.com/bytedance/unpub/workflows/test/badge.svg)](https://github.com/bytedance/unpub/actions?query=workflow:test)
 
 Unpub is a self-hosted private Dart Pub server for Enterprise, with a simple web interface to search and view packages information.
 
@@ -48,14 +47,14 @@ main(List<String> args) async {
 
 ### Options
 
-| Option                    | Description                                                                          | Default         |
-| ------------------------- | ------------------------------------------------------------------------------------ | --------------- |
-| `metaStore` (Required)    | Meta information store                                                               | -               |
-| `packageStore` (Required) | Package(tarball) store                                                               | -               |
-| `upstream`                | Upstream url                                                                         | https://pub.dev |
-| `googleapisProxy`         | Http(s) proxy to call googleapis (to get uploader email)                             | -               |
-| `overrideUploaderEmail`   | If specified, unpub will use this email as uploader instead of requesting googleapis | -               |
-| `uploadValidator`         | See [Package validator](#package-validator)                                          | -               |
+| Option | Description | Default |
+| --- | --- | --- |
+| `metaStore` (Required) | Meta information store | - |
+| `packageStore` (Required) | Package(tarball) store | - |
+| `upstream` | Upstream url | https://pub.dev |
+| `googleapisProxy` | Http(s) proxy to call googleapis (to get uploader email) | - |
+| `overrideUploaderEmail` | If specified, unpub will use this email as uploader instead of requesting googleapis | - |
+| `uploadValidator` | See [Package validator](#package-validator) | - |
 
 ### Package validator
 
@@ -108,10 +107,10 @@ var app = unpub.App(
 
 ## Badges
 
-| URL                                          | Badge                                                                                     |
-| -------------------------------------------- | ----------------------------------------------------------------------------------------- |
+| URL | Badge |
+| --- | --- |
 | `/badge/v/{package_name}` | ![badge example](https://img.shields.io/static/v1?label=unpub&message=0.1.0&color=orange) ![badge example](https://img.shields.io/static/v1?label=unpub&message=1.0.0&color=blue) |
-| `/badge/d/{package_name}`                    | ![badge example](https://img.shields.io/static/v1?label=downloads&message=123&color=blue) |
+| `/badge/d/{package_name}` | ![badge example](https://img.shields.io/static/v1?label=downloads&message=123&color=blue) |
 
 ## Alternatives
 
