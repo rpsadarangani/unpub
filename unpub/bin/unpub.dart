@@ -12,7 +12,7 @@ main(List<String> args) async {
 
   var results = parser.parse(args);
 
-  var host = results['host'] as String;
+  var host = results['host'] as String?;
   var port = int.parse(results['port'] as String);
   var db = results['database'] as String;
 

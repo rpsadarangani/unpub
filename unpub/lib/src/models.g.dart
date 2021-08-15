@@ -6,17 +6,15 @@ part of 'models.dart';
 // JsonSerializableGenerator
 // **************************************************************************
 
-UnpubVersion _$UnpubVersionFromJson(Map<String, dynamic> json) {
-  return UnpubVersion(
-    json['version'] as String,
-    json['pubspec'] as Map<String, dynamic>,
-    json['pubspecYaml'] as String,
-    json['readme'] as String,
-    json['changelog'] as String,
-    json['uploader'] as String,
-    identity(json['createdAt'] as DateTime),
-  );
-}
+UnpubVersion _$UnpubVersionFromJson(Map<String, dynamic> json) => UnpubVersion(
+      json['version'] as String?,
+      json['pubspec'] as Map<String, dynamic>?,
+      json['pubspecYaml'] as String?,
+      json['readme'] as String?,
+      json['changelog'] as String?,
+      json['uploader'] as String?,
+      identity(json['createdAt'] as DateTime?),
+    );
 
 Map<String, dynamic> _$UnpubVersionToJson(UnpubVersion instance) {
   final val = <String, dynamic>{};
@@ -37,20 +35,17 @@ Map<String, dynamic> _$UnpubVersionToJson(UnpubVersion instance) {
   return val;
 }
 
-UnpubPackage _$UnpubPackageFromJson(Map<String, dynamic> json) {
-  return UnpubPackage(
-    json['name'] as String,
-    (json['versions'] as List)
-        ?.map((e) =>
-            e == null ? null : UnpubVersion.fromJson(e as Map<String, dynamic>))
-        ?.toList(),
-    json['private'] as bool,
-    (json['uploaders'] as List)?.map((e) => e as String)?.toList(),
-    identity(json['createdAt'] as DateTime),
-    identity(json['updatedAt'] as DateTime),
-    json['download'] as int,
-  );
-}
+UnpubPackage _$UnpubPackageFromJson(Map<String, dynamic> json) => UnpubPackage(
+      json['name'] as String?,
+      (json['versions'] as List<dynamic>?)
+          ?.map((e) => UnpubVersion.fromJson(e as Map<String, dynamic>))
+          .toList(),
+      json['private'] as bool?,
+      (json['uploaders'] as List<dynamic>?)?.map((e) => e as String).toList(),
+      identity(json['createdAt'] as DateTime?),
+      identity(json['updatedAt'] as DateTime?),
+      json['download'] as int?,
+    );
 
 Map<String, dynamic> _$UnpubPackageToJson(UnpubPackage instance) =>
     <String, dynamic>{

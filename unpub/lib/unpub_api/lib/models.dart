@@ -4,8 +4,8 @@ part 'models.g.dart';
 
 @JsonSerializable()
 class ListApi {
-  int count;
-  List<ListApiPackage> packages;
+  int? count;
+  List<ListApiPackage>? packages;
 
   ListApi(this.count, this.packages);
 
@@ -15,11 +15,11 @@ class ListApi {
 
 @JsonSerializable()
 class ListApiPackage {
-  String name;
-  String description;
-  List<String> tags;
-  String latest;
-  DateTime updatedAt;
+  String? name;
+  String? description;
+  List<String>? tags;
+  String? latest;
+  DateTime? updatedAt;
 
   ListApiPackage(
       this.name, this.description, this.tags, this.latest, this.updatedAt);
@@ -31,8 +31,8 @@ class ListApiPackage {
 
 @JsonSerializable()
 class DetailViewVersion {
-  String version;
-  DateTime createdAt;
+  String? version;
+  DateTime? createdAt;
 
   DetailViewVersion(this.version, this.createdAt);
 
@@ -44,18 +44,18 @@ class DetailViewVersion {
 
 @JsonSerializable()
 class WebapiDetailView {
-  String name;
-  String version;
-  String description;
-  String homepage;
-  List<String> uploaders;
-  DateTime createdAt;
-  final String readme;
-  final String changelog;
-  List<DetailViewVersion> versions;
-  List<String> authors;
-  List<String> dependencies;
-  List<String> tags;
+  String? name;
+  String? version;
+  String? description;
+  String? homepage;
+  List<String>? uploaders;
+  DateTime? createdAt;
+  final String? readme;
+  final String? changelog;
+  List<DetailViewVersion>? versions;
+  List<String?>? authors;
+  List<String>? dependencies;
+  List<String>? tags;
 
   WebapiDetailView(
       this.name,

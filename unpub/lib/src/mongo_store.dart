@@ -12,10 +12,10 @@ class MongoStore extends MetaStore {
   MongoStore(String uri) : db = Db(uri);
   MongoStore.pool(List<String> uris) : db = Db.pool(uris);
 
-  SelectorBuilder _selectByName(String name) => where.eq('name', name);
+  SelectorBuilder _selectByName(String? name) => where.eq('name', name);
 
   @override
-  Future<UnpubPackage> queryPackage(String name) async {
+  Future<UnpubPackage?> queryPackage(String? name) async {
     var json =
         await db.collection(packageCollection).findOne(_selectByName(name));
     if (json == null) return null;
@@ -23,7 +23,7 @@ class MongoStore extends MetaStore {
   }
 
   @override
-  Future<void> addVersion(String name, UnpubVersion version) async {
+  Future<void> addVersion(String? name, UnpubVersion version) async {
     await db.collection(packageCollection).update(
         _selectByName(name),
         modify
@@ -37,7 +37,7 @@ class MongoStore extends MetaStore {
   }
 
   @override
-  Future<void> addUploader(String name, String email) async {
+  Future<void> addUploader(String name, String? email) async {
     await db
         .collection(packageCollection)
         .update(_selectByName(name), modify.push('uploaders', email));
@@ -74,7 +74,7 @@ class MongoStore extends MetaStore {
         }),
   };
 
-  SelectorBuilder _buildSearchSelector(String q) {
+  SelectorBuilder _buildSearchSelector(String? q) {
     if (q == null || q == '') return where;
 
     for (var entry in _keywordPrefixes.entries) {
@@ -87,13 +87,13 @@ class MongoStore extends MetaStore {
   }
 
   @override
-  Future<int> queryCount(String q) {
+  Future<int> queryCount(String? q) {
     return db.collection(packageCollection).count(_buildSearchSelector(q));
   }
 
   @override
   Stream<UnpubPackage> queryPackages(
-      int size, int page, String sort, String q) {
+      int size, int page, String sort, String? q) {
     var selector = _buildSearchSelector(q)
         .sortBy(sort, descending: true)
         .limit(size)
