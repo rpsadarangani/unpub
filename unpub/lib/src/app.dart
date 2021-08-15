@@ -216,11 +216,14 @@ class App {
 
       var mediaType = MediaType.parse(req.headers['content-type']!);
 
-      var boundary = mediaType.parameters['boundary']!;
+      var transformer =
+          MimeMultipartTransformer(mediaType.parameters['boundary']!);
       MimeMultipart? fileData;
 
-      await for (MimeMultipart part
-          in req.read().transform(MimeMultipartTransformer(boundary))) {
+      // The map below makes the runtime type checker happy.
+      // https://github.com/dart-lang/pub-dev/blob/19033f8154ca1f597ef5495acbc84a2bb368f16d/app/lib/fake/server/fake_storage_server.dart#L74
+      final stream = req.read().map((a) => a).transform(transformer);
+      await for (var part in stream) {
         if (fileData != null) continue;
         fileData = part;
       }
