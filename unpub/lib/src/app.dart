@@ -8,6 +8,7 @@ import 'package:http/io_client.dart';
 import 'package:googleapis/oauth2/v2.dart';
 import 'package:mime/mime.dart';
 import 'package:http_parser/http_parser.dart';
+import 'package:shelf_cors_headers/shelf_cors_headers.dart';
 import 'package:shelf_router/shelf_router.dart';
 import 'package:pub_semver/pub_semver.dart' as semver;
 import 'package:archive/archive.dart';
@@ -90,6 +91,7 @@ class App {
 
   Future<HttpServer> serve([String? host = '0.0.0.0', int port = 4000]) async {
     var handler = const shelf.Pipeline()
+        .addMiddleware(corsHeaders())
         .addMiddleware(shelf.logRequests())
         .addHandler((req) async {
       // Return 404 by default
