@@ -374,7 +374,7 @@ class App {
     var size = int.tryParse(params['size'] ?? '') ?? 10;
     var page = int.tryParse(params['page'] ?? '') ?? 0;
     var sort = params['sort'] ?? 'download';
-    var q = params['q'] as String; // TODO: null
+    var q = params['q'];
 
     var count = await metaStore.queryCount(q);
     if (count == 0) {

@@ -87,7 +87,7 @@ class MongoStore extends MetaStore {
   }
 
   @override
-  Future<int> queryCount(String? q) {
+  Future<int> queryCount(q) {
     return db.collection(packageCollection).count(_buildSearchSelector(q));
   }
 

@@ -11,7 +11,7 @@ abstract class MetaStore {
 
   void increaseDownloads(String name, String version);
 
-  Future<int> queryCount(String q);
+  Future<int> queryCount(String? q);
 
   Stream<UnpubPackage> queryPackages(
       int size, int page, String sort, String? q);
