@@ -121,7 +121,7 @@
             ><i class="email-icon"></i
           ></a>
           <a
-            href="/packages?q=email:{{ email }}"
+            [routerLink]="getListUrl('email:'+email)"
             title="Search packages with {{ email }}"
             rel="nofollow"
             ><i class="search-icon"></i
@@ -137,7 +137,7 @@
             ><i class="email-icon"></i
           ></a>
           <a
-            href="/packages?q=email:{{ email }}"
+            [routerLink]="getListUrl('email:'+email)"
             title="Search packages with {{ email }}"
             rel="nofollow"
             ><i class="search-icon"></i
@@ -156,7 +156,7 @@
 
       <h3 class="title">More</h3>
       <p>
-        <a href="/packages?q=dependency%3A{{ package.name }}" rel="nofollow"
+        <a [routerLink]="getListUrl('dependency:'+package.name)" rel="nofollow"
           >Packages that depend on {{ package.name }}</a
         >
       </p>

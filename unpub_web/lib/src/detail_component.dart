@@ -80,8 +80,8 @@ class DetailComponent implements OnInit, OnActivate {
     }
   }
 
-  getListUrl(String name) {
-    return RoutePaths.list.toUrl(parameters: {'name': name});
+  getListUrl(String q) {
+    return RoutePaths.list.toUrl(queryParameters: {'q': q});
   }
 
   getDetailUrl(String name, [String version]) {
