@@ -72,7 +72,7 @@ class DetailComponent implements OnInit, OnActivate {
             .setInnerHtml(readmeHtml, validator: _htmlValidator);
         querySelector('#changelog')
             .setInnerHtml(changelogHtml, validator: _htmlValidator);
-      } on PackageNotExistsException catch (e) {
+      } on PackageNotExistsException {
         packageNotExists = true;
       } finally {
         appService.setLoading(false);

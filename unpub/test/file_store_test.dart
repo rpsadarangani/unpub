@@ -25,8 +25,7 @@ main() {
 
   test('upload-download-custom-path', () async {
     var baseDir = _setup_fixture('upload-download-custom-path');
-    var store =
-        unpub.FileStore(baseDir.path, getFilePath: newFilePathFunc());
+    var store = unpub.FileStore(baseDir.path, getFilePath: newFilePathFunc());
     await store.upload('test_package', '1.0.0', TEST_PKG_DATA);
     var pkg2 = await readByteStream(store.download('test_package', '1.0.0'));
     expect(pkg2, TEST_PKG_DATA);
