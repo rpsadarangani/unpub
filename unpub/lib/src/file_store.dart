@@ -1,14 +1,20 @@
 import 'dart:io';
+
 import 'package:path/path.dart' as path;
+
 import 'package_store.dart';
 
 class FileStore extends PackageStore {
   String baseDir;
+  String Function(String name, String version)? getFilePath;
 
-  FileStore(this.baseDir);
+  FileStore(this.baseDir,
+      {String Function(String name, String version)? this.getFilePath});
 
   File _getTarballFile(String package, String version) {
-    return File(path.join(baseDir, '$package-$version.tar.gz'));
+    return getFilePath == null
+        ? File(path.join(baseDir, '$package-$version.tar.gz'))
+        : File(path.join(baseDir, getFilePath!(package, version)));
   }
 
   @override
