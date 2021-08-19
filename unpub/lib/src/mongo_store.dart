@@ -9,8 +9,7 @@ final statsCollection = 'stats';
 class MongoStore extends MetaStore {
   Db db;
 
-  MongoStore(String uri) : db = Db(uri);
-  MongoStore.pool(List<String> uris) : db = Db.pool(uris);
+  MongoStore(this.db);
 
   SelectorBuilder _selectByName(String? name) => where.eq('name', name);
 
@@ -37,7 +36,7 @@ class MongoStore extends MetaStore {
   }
 
   @override
-  Future<void> addUploader(String name, String? email) async {
+  Future<void> addUploader(name, email) async {
     await db
         .collection(packageCollection)
         .update(_selectByName(name), modify.push('uploaders', email));
@@ -92,8 +91,7 @@ class MongoStore extends MetaStore {
   }
 
   @override
-  Stream<UnpubPackage> queryPackages(
-      int size, int page, String sort, String? q) {
+  Stream<UnpubPackage> queryPackages(size, page, sort, q) {
     var selector = _buildSearchSelector(q)
         .sortBy(sort, descending: true)
         .limit(size)

@@ -1,6 +1,7 @@
 import 'dart:io';
 import 'package:path/path.dart' as path;
 import 'package:args/args.dart';
+import 'package:mongo_dart/mongo_dart.dart';
 import 'package:unpub/unpub.dart' as unpub;
 
 main(List<String> args) async {
@@ -14,7 +15,7 @@ main(List<String> args) async {
 
   var host = results['host'] as String?;
   var port = int.parse(results['port'] as String);
-  var db = results['database'] as String;
+  var dbUri = results['database'] as String;
 
   if (results.rest.isNotEmpty) {
     print('Got unexpected arguments: "${results.rest.join(' ')}".\n\nUsage:\n');
@@ -22,13 +23,13 @@ main(List<String> args) async {
     exit(1);
   }
 
+  final db = Db(dbUri);
+  await db.open();
+
   var baseDir = path.absolute('unpub-packages');
 
-  var mongoStore = unpub.MongoStore(db);
-  await mongoStore.db.open();
-
   var app = unpub.App(
-    metaStore: mongoStore,
+    metaStore: unpub.MongoStore(db),
     packageStore: unpub.FileStore(baseDir),
   );
 
