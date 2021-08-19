@@ -7,17 +7,22 @@ part of 'models.dart';
 // **************************************************************************
 
 UnpubVersion _$UnpubVersionFromJson(Map<String, dynamic> json) => UnpubVersion(
-      json['version'] as String?,
-      json['pubspec'] as Map<String, dynamic>?,
-      json['pubspecYaml'] as String?,
+      json['version'] as String,
+      json['pubspec'] as Map<String, dynamic>,
+      json['pubspecYaml'] as String,
       json['readme'] as String?,
       json['changelog'] as String?,
-      json['uploader'] as String?,
-      identity(json['createdAt'] as DateTime?),
+      json['uploader'] as String,
+      identity(json['createdAt'] as DateTime),
     );
 
 Map<String, dynamic> _$UnpubVersionToJson(UnpubVersion instance) {
-  final val = <String, dynamic>{};
+  final val = <String, dynamic>{
+    'version': instance.version,
+    'pubspec': instance.pubspec,
+    'pubspecYaml': instance.pubspecYaml,
+    'uploader': instance.uploader,
+  };
 
   void writeNotNull(String key, dynamic value) {
     if (value != null) {
@@ -25,26 +30,22 @@ Map<String, dynamic> _$UnpubVersionToJson(UnpubVersion instance) {
     }
   }
 
-  writeNotNull('version', instance.version);
-  writeNotNull('pubspec', instance.pubspec);
-  writeNotNull('pubspecYaml', instance.pubspecYaml);
   writeNotNull('readme', instance.readme);
   writeNotNull('changelog', instance.changelog);
-  writeNotNull('uploader', instance.uploader);
   writeNotNull('createdAt', identity(instance.createdAt));
   return val;
 }
 
 UnpubPackage _$UnpubPackageFromJson(Map<String, dynamic> json) => UnpubPackage(
-      json['name'] as String?,
-      (json['versions'] as List<dynamic>?)
-          ?.map((e) => UnpubVersion.fromJson(e as Map<String, dynamic>))
+      json['name'] as String,
+      (json['versions'] as List<dynamic>)
+          .map((e) => UnpubVersion.fromJson(e as Map<String, dynamic>))
           .toList(),
-      json['private'] as bool?,
-      (json['uploaders'] as List<dynamic>?)?.map((e) => e as String).toList(),
-      identity(json['createdAt'] as DateTime?),
-      identity(json['updatedAt'] as DateTime?),
-      json['download'] as int?,
+      json['private'] as bool,
+      (json['uploaders'] as List<dynamic>).map((e) => e as String).toList(),
+      identity(json['createdAt'] as DateTime),
+      identity(json['updatedAt'] as DateTime),
+      json['download'] as int,
     );
 
 Map<String, dynamic> _$UnpubPackageToJson(UnpubPackage instance) =>

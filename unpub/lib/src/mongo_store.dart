@@ -15,7 +15,7 @@ class MongoStore extends MetaStore {
   SelectorBuilder _selectByName(String? name) => where.eq('name', name);
 
   @override
-  Future<UnpubPackage?> queryPackage(String? name) async {
+  Future<UnpubPackage?> queryPackage(name) async {
     var json =
         await db.collection(packageCollection).findOne(_selectByName(name));
     if (json == null) return null;
@@ -23,7 +23,7 @@ class MongoStore extends MetaStore {
   }
 
   @override
-  Future<void> addVersion(String? name, UnpubVersion version) async {
+  Future<void> addVersion(name, version) async {
     await db.collection(packageCollection).update(
         _selectByName(name),
         modify
@@ -44,14 +44,14 @@ class MongoStore extends MetaStore {
   }
 
   @override
-  Future<void> removeUploader(String name, String email) async {
+  Future<void> removeUploader(name, email) async {
     await db
         .collection(packageCollection)
         .update(_selectByName(name), modify.pull('uploaders', email));
   }
 
   @override
-  void increaseDownloads(String name, String version) {
+  void increaseDownloads(name, version) {
     var today = DateFormat('yyyyMMdd').format(DateTime.now());
     db
         .collection(packageCollection)

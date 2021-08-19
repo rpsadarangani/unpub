@@ -53,7 +53,6 @@ main(List<String> args) async {
 | `packageStore` (Required) | Package(tarball) store | - |
 | `upstream` | Upstream url | https://pub.dev |
 | `googleapisProxy` | Http(s) proxy to call googleapis (to get uploader email) | - |
-| `overrideUploaderEmail` | If specified, unpub will use this email as uploader instead of requesting googleapis | - |
 | `uploadValidator` | See [Package validator](#package-validator) | - |
 
 ### Package validator

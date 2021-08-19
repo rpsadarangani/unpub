@@ -23,13 +23,24 @@ import 'static/main.dart.js.dart' as main_dart_js;
 part 'app.g.dart';
 
 class App {
+  /// meta information store
   final MetaStore metaStore;
+
+  /// package(tarball) store
   final PackageStore packageStore;
+
+  /// upstream url, default: https://pub.dev
   final String upstream;
+
+  /// http(s) proxy to call googleapis (to get uploader email)
   final String? googleapisProxy;
   final String? overrideUploaderEmail;
+
+  /// validate if the package can be published
+  ///
+  /// for more details, see: https://github.com/bytedance/unpub#package-validator
   final Future<void> Function(
-      Map<String, dynamic> pubspec, String? uploaderEmail)? uploadValidator;
+      Map<String, dynamic> pubspec, String uploaderEmail)? uploadValidator;
 
   App({
     required this.metaStore,
@@ -65,11 +76,11 @@ class App {
 
   http.Client? _googleapisClient;
 
-  Future<String?> _getUploaderEmail(shelf.Request req) async {
-    if (overrideUploaderEmail != null) return overrideUploaderEmail;
+  Future<String> _getUploaderEmail(shelf.Request req) async {
+    if (overrideUploaderEmail != null) return overrideUploaderEmail!;
 
     var authHeader = req.headers[HttpHeaders.authorizationHeader];
-    if (authHeader == null) return null;
+    if (authHeader == null) throw 'missing authorization header';
 
     var token = authHeader.split(' ').last;
 
@@ -85,8 +96,8 @@ class App {
 
     var info =
         await Oauth2Api(_googleapisClient!).tokeninfo(accessToken: token);
-    if (info == null) return null;
-    return info.email;
+    if (info.email == null) throw 'fail to get google account email';
+    return info.email!;
   }
 
   Future<HttpServer> serve([String? host = '0.0.0.0', int port = 4000]) async {
@@ -97,18 +108,14 @@ class App {
       // Return 404 by default
       // https://github.com/google/dart-neats/issues/1
       var res = await router.call(req);
-      if (res == null) {
-        return shelf.Response.notFound('Not found');
-      } else {
-        return res;
-      }
+      return res;
     });
     var server = await shelf_io.serve(handler, host, port);
     return server;
   }
 
   Map<String, dynamic> _versionToJson(UnpubVersion item, Uri baseUri) {
-    var name = item.pubspec!['name'] as String?;
+    var name = item.pubspec['name'] as String;
     var version = item.version;
     return {
       'archive_url': baseUri
@@ -121,6 +128,7 @@ class App {
 
   bool isPubClient(shelf.Request req) {
     var ua = req.headers[HttpHeaders.userAgentHeader];
+    print(ua);
     return ua != null && ua.toLowerCase().contains('dart pub');
   }
 
@@ -135,12 +143,12 @@ class App {
           Uri.parse(upstream).resolve('/api/packages/$name').toString());
     }
 
-    package.versions!.sort((a, b) {
+    package.versions.sort((a, b) {
       return semver.Version.prioritize(
-          semver.Version.parse(a.version!), semver.Version.parse(b.version!));
+          semver.Version.parse(a.version), semver.Version.parse(b.version));
     });
 
-    var versionMaps = package.versions!
+    var versionMaps = package.versions
         .map((item) => _versionToJson(item, req.requestedUri))
         .toList();
 
@@ -169,7 +177,7 @@ class App {
     }
 
     var packageVersion =
-        package.versions!.firstWhereOrNull((item) => item.version == version);
+        package.versions.firstWhereOrNull((item) => item.version == version);
     if (packageVersion == null) {
       return shelf.Response.notFound('Not Found');
     }
@@ -278,12 +286,12 @@ class App {
         }
 
         // Check uploaders
-        if (!package.uploaders!.contains(email)) {
+        if (!package.uploaders.contains(email)) {
           throw '$email is not an uploader of $name';
         }
 
         // Check duplicated version
-        var duplicated = package.versions!
+        var duplicated = package.versions
             .firstWhereOrNull((item) => version == item.version);
         if (duplicated != null) {
           throw 'version invalid: $name@$version already exists.';
@@ -304,7 +312,7 @@ class App {
 
       // Write package meta to database
       var unpubVersion = UnpubVersion(
-        pubspec['version'] as String?,
+        version,
         pubspec,
         pubspecYaml,
         readme,
@@ -340,10 +348,10 @@ class App {
     var operatorEmail = await _getUploaderEmail(req);
     var package = await metaStore.queryPackage(name);
 
-    if (package?.uploaders?.contains(operatorEmail) != true) {
+    if (package?.uploaders.contains(operatorEmail) != true) {
       return _badRequest('no permission', status: HttpStatus.forbidden);
     }
-    if (package?.uploaders?.contains(email) == true) {
+    if (package?.uploaders.contains(email) == true) {
       return _badRequest('email already exists');
     }
 
@@ -359,10 +367,10 @@ class App {
     var package = await metaStore.queryPackage(name);
 
     // TODO: null
-    if (!package!.uploaders!.contains(operatorEmail)) {
+    if (!package!.uploaders.contains(operatorEmail)) {
       return _badRequest('no permission', status: HttpStatus.forbidden);
     }
-    if (!package.uploaders!.contains(email)) {
+    if (!package.uploaders.contains(email)) {
       return _badRequest('email not uploader');
     }
 
@@ -385,12 +393,12 @@ class App {
 
     var packages =
         await metaStore.queryPackages(size, page, sort, q).map((package) {
-      var latest = package.versions!.last;
+      var latest = package.versions.last;
 
       return ListApiPackage(
         package.name,
-        latest.pubspec!['description'] as String?,
-        getPackageTags(latest.pubspec!),
+        latest.pubspec['description'] as String?,
+        getPackageTags(latest.pubspec),
         latest.version,
         package.updatedAt,
       );
@@ -410,16 +418,16 @@ class App {
 
     UnpubVersion? packageVersion;
     if (version == 'latest') {
-      packageVersion = package.versions!.last;
+      packageVersion = package.versions.last;
     } else {
       packageVersion =
-          package.versions!.firstWhereOrNull((item) => item.version == version);
+          package.versions.firstWhereOrNull((item) => item.version == version);
     }
     if (packageVersion == null) {
       return _okWithJson({'error': 'version not exists'});
     }
 
-    var versions = package.versions!
+    var versions = package.versions
         .map((v) => DetailViewVersion(v.version, v.createdAt))
         .toList();
     versions.sort((a, b) {
@@ -427,7 +435,7 @@ class App {
           semver.Version.parse(b.version!), semver.Version.parse(a.version!));
     });
 
-    var pubspec = packageVersion.pubspec!;
+    var pubspec = packageVersion.pubspec;
     List<String?> authors;
     if (pubspec['author'] != null) {
       authors = RegExp(r'<(.*?)>')
@@ -447,8 +455,8 @@ class App {
     var data = WebapiDetailView(
       package.name,
       packageVersion.version,
-      packageVersion.pubspec!['description'] ?? '',
-      packageVersion.pubspec!['homepage'] ?? '',
+      packageVersion.pubspec['description'] ?? '',
+      packageVersion.pubspec['homepage'] ?? '',
       package.uploaders,
       packageVersion.createdAt,
       packageVersion.readme,
@@ -456,7 +464,7 @@ class App {
       versions,
       authors,
       depMap.keys.toList(),
-      getPackageTags(packageVersion.pubspec!),
+      getPackageTags(packageVersion.pubspec),
     );
 
     return _okWithJson({'data': data.toJson()});
@@ -503,8 +511,8 @@ class App {
 
     switch (type) {
       case 'v':
-        var latest = semver.Version.primary(package.versions!
-            .map((pv) => semver.Version.parse(pv.version!))
+        var latest = semver.Version.primary(package.versions
+            .map((pv) => semver.Version.parse(pv.version))
             .toList());
 
         var color = latest.major == 0 ? 'orange' : 'blue';
