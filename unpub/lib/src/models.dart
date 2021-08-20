@@ -9,7 +9,7 @@ class UnpubVersion {
   final String version;
   final Map<String, dynamic> pubspec;
   final String pubspecYaml;
-  final String uploader;
+  final String? uploader; // TODO: not sure why null. keep it nullable
   final String? readme;
   final String? changelog;
 
@@ -45,7 +45,7 @@ class UnpubPackage {
   @JsonKey(fromJson: identity, toJson: identity)
   final DateTime updatedAt;
 
-  final int download;
+  final int? download;
 
   UnpubPackage(
     this.name,
