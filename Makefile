@@ -12,3 +12,4 @@ build:
 	dart pub global activate webdev 2.7.4 &&\
 	dart pub global run webdev build
 	dart unpub/tool/pre_publish.dart
+	dart format **/*.dart
