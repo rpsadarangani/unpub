@@ -5,7 +5,7 @@ dev-web:
 	dart pub global run webdev_proxy serve -- --auto=refresh --log-requests
 
 dev-api:
-	cd unpub &&	dart pub run build_runner watch
+	cd unpub &&	dart run build_runner watch
 
 build:
 	cd unpub_web &&\

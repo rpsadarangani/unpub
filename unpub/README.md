@@ -8,7 +8,9 @@ Unpub is a self-hosted private Dart Pub server for Enterprise, with a simple web
 
 ![Screenshot](https://raw.githubusercontent.com/bytedance/unpub/master/assets/screenshot.png)
 
-## Usage via command line
+## Usage
+
+### Command Line
 
 ```sh
 pub global activate unpub
@@ -19,28 +21,22 @@ Unpub use mongodb as meta information store and file system as package(tarball) 
 
 Dart API is also available for further customization.
 
-## Usage via Dart API
-
-### Example
+### Dart API
 
 ```dart
+import 'package:mongo_dart/mongo_dart.dart';
 import 'package:unpub/unpub.dart' as unpub;
 
 main(List<String> args) async {
-  var basedir = '/path/to/basedir'; // Base directory to save pacakges
-  var db = 'mongodb://localhost:27017/dart_pub'; // MongoDB uri
+  final db = Db('mongodb://localhost:27017/dart_pub');
+  await db.open(); // make sure the MongoDB connection opened
 
-  var metaStore = unpub.MongoStore(db);
-  await metaStore.db.open();
-
-  var packageStore = unpub.FileStore(basedir);
-
-  var app = unpub.App(
-    metaStore: metaStore,
-    packageStore: packageStore,
+  final app = unpub.App(
+    metaStore: unpub.MongoStore(db),
+    packageStore: unpub.FileStore('./unpub-packages'),
   );
 
-  var server = await app.serve('0.0.0.0', 4000);
+  final server = await app.serve('0.0.0.0', 4000);
   print('Serving at http://${server.address.host}:${server.port}');
 }
 ```
