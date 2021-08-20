@@ -42,10 +42,8 @@ Future<http.Response> getSpecificVersion(String package, String version) {
   return http.get(baseUri.resolve('/api/packages/$package/versions/$version'));
 }
 
-var pubCommand = Platform.isWindows ? 'pub.bat' : 'pub';
-
 Future<ProcessResult> pubPublish(String name, String version) {
-  return Process.run(pubCommand, ['publish', '--force'],
+  return Process.run('dart', ['pub', 'publish', '--force'],
       workingDirectory: path.absolute('test/fixtures', name, version),
       environment: {'PUB_HOSTED_URL': pubHostedUrl});
 }
@@ -53,7 +51,7 @@ Future<ProcessResult> pubPublish(String name, String version) {
 Future<ProcessResult> pubUploader(String name, String operation, String email) {
   assert(['add', 'remove'].contains(operation), 'operation error');
 
-  return Process.run(pubCommand, ['uploader', operation, email],
+  return Process.run('dart', ['pub', 'uploader', operation, email],
       workingDirectory: path.absolute('test/fixtures', name, '0.0.1'),
       environment: {'PUB_HOSTED_URL': pubHostedUrl});
 }
