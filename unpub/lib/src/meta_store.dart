@@ -11,12 +11,12 @@ abstract class MetaStore {
 
   void increaseDownloads(String name, String version);
 
-  Future<UnpubQueryResult> queryPackages(
-      int size, int page, String sort, String? keyword);
-
-  Future<UnpubQueryResult> queryPackagesByUploader(
-      int size, int page, String sort, String email);
-
-  Future<UnpubQueryResult> queryPackagesByDependency(
-      int size, int page, String sort, String dependency);
+  Future<UnpubQueryResult> queryPackages({
+    required int size,
+    required int page,
+    required String sort,
+    String? keyword,
+    String? uploader,
+    String? dependency,
+  });
 }

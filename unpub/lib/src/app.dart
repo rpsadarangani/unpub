@@ -386,16 +386,27 @@ class App {
     var sort = params['sort'] ?? 'download';
     var q = params['q'];
 
-    UnpubQueryResult result;
-    if (q?.startsWith('email:') ?? false) {
-      result = await metaStore.queryPackagesByUploader(
-          size, page, sort, q!.substring(6).trim());
-    } else if (q?.startsWith('dependency:') ?? false) {
-      result = await metaStore.queryPackagesByDependency(
-          size, page, sort, q!.substring(11).trim());
+    String? keyword;
+    String? uploader;
+    String? dependency;
+
+    if (q == null) {
+    } else if (q.startsWith('email:')) {
+      uploader = q.substring(6).trim();
+    } else if (q.startsWith('dependency:')) {
+      dependency = q.substring(11).trim();
     } else {
-      result = await metaStore.queryPackages(size, page, sort, q);
+      keyword = q;
     }
+
+    final result = await metaStore.queryPackages(
+      size: size,
+      page: page,
+      sort: sort,
+      keyword: keyword,
+      uploader: uploader,
+      dependency: dependency,
+    );
 
     var data = ListApi(result.count, [
       for (var package in result.packages)

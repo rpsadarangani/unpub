@@ -72,40 +72,32 @@ class MongoStore extends MetaStore {
   }
 
   @override
-  queryPackages(size, page, sort, keyword) async {
+  Future<UnpubQueryResult> queryPackages({
+    required size,
+    required page,
+    required sort,
+    keyword,
+    uploader,
+    dependency,
+  }) {
     var selector =
         where.sortBy(sort, descending: true).limit(size).skip(page * size);
+
     if (keyword != null) {
       selector = selector.match('name', '.*$keyword.*');
     }
-
-    return _queryPackagesBySelector(selector);
-  }
-
-  @override
-  queryPackagesByUploader(size, page, sort, email) {
-    var selector = where
-        .eq('uploaders', email)
-        .sortBy(sort, descending: true)
-        .limit(size)
-        .skip(page * size);
-
-    return _queryPackagesBySelector(selector);
-  }
-
-  @override
-  queryPackagesByDependency(size, page, sort, dependency) {
-    var selector = where
-        .raw({
-          'versions': {
-            r'$elemMatch': {
-              'pubspec.dependencies.$dependency': {r'$exists': true}
-            }
+    if (uploader != null) {
+      selector = selector.eq('uploaders', uploader);
+    }
+    if (dependency != null) {
+      selector = selector.raw({
+        'versions': {
+          r'$elemMatch': {
+            'pubspec.dependencies.$dependency': {r'$exists': true}
           }
-        })
-        .sortBy(sort, descending: true)
-        .limit(size)
-        .skip(page * size);
+        }
+      });
+    }
 
     return _queryPackagesBySelector(selector);
   }
