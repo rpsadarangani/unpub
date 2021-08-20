@@ -224,10 +224,14 @@ class App {
     try {
       var uploader = await _getUploaderEmail(req);
 
-      var mediaType = MediaType.parse(req.headers['content-type']!);
+      var contentType = req.headers['content-type'];
+      if (contentType == null) throw 'invalid content type';
 
-      var transformer =
-          MimeMultipartTransformer(mediaType.parameters['boundary']!);
+      var mediaType = MediaType.parse(contentType);
+      var boundary = mediaType.parameters['boundary'];
+      if (boundary == null) throw 'invalid boundary';
+
+      var transformer = MimeMultipartTransformer(boundary);
       MimeMultipart? fileData;
 
       // The map below makes the runtime type checker happy.
@@ -446,7 +450,7 @@ class App {
         .toList();
     versions.sort((a, b) {
       return semver.Version.prioritize(
-          semver.Version.parse(b.version!), semver.Version.parse(a.version!));
+          semver.Version.parse(b.version), semver.Version.parse(a.version));
     });
 
     var pubspec = packageVersion.pubspec;
