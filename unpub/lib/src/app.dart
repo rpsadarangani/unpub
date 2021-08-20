@@ -222,7 +222,7 @@ class App {
   @Route.post('/api/packages/versions/newUpload')
   Future<shelf.Response> upload(shelf.Request req) async {
     try {
-      var email = await _getUploaderEmail(req);
+      var uploader = await _getUploaderEmail(req);
 
       var mediaType = MediaType.parse(req.headers['content-type']!);
 
@@ -270,7 +270,7 @@ class App {
       var pubspec = loadYamlAsMap(pubspecYaml)!;
 
       if (uploadValidator != null) {
-        await uploadValidator!(pubspec, email);
+        await uploadValidator!(pubspec, uploader);
       }
 
       // TODO: null
@@ -286,8 +286,8 @@ class App {
         }
 
         // Check uploaders
-        if (!package.uploaders.contains(email)) {
-          throw '$email is not an uploader of $name';
+        if (!package.uploaders.contains(uploader)) {
+          throw '$uploader is not an uploader of $name';
         }
 
         // Check duplicated version
@@ -315,9 +315,9 @@ class App {
         version,
         pubspec,
         pubspecYaml,
+        uploader,
         readme,
         changelog,
-        email,
         DateTime.now(),
       );
       await metaStore.addVersion(name, unpubVersion);
@@ -386,24 +386,24 @@ class App {
     var sort = params['sort'] ?? 'download';
     var q = params['q'];
 
-    var count = await metaStore.queryCount(q);
-    if (count == 0) {
-      return _okWithJson({'data': ListApi(0, []).toJson()});
+    UnpubQueryResult result;
+    if (q?.startsWith('email:') ?? false) {
+      result = await metaStore.queryPackagesByUploader(
+          size, page, sort, q!.substring(6).trim());
+    } else {
+      result = await metaStore.queryPackages(size, page, sort, q);
     }
 
-    var packages =
-        await metaStore.queryPackages(size, page, sort, q).map((package) {
-      var latest = package.versions.last;
-
-      return ListApiPackage(
-        package.name,
-        latest.pubspec['description'] as String?,
-        getPackageTags(latest.pubspec),
-        latest.version,
-        package.updatedAt,
-      );
-    }).toList();
-    var data = ListApi(count, packages);
+    var data = ListApi(result.count, [
+      for (var package in result.packages)
+        ListApiPackage(
+          package.name,
+          package.versions.last.pubspec['description'] as String?,
+          getPackageTags(package.versions.last.pubspec),
+          package.versions.last.version,
+          package.updatedAt,
+        )
+    ]);
 
     return _okWithJson({'data': data.toJson()});
   }

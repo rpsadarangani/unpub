@@ -20,9 +20,9 @@ class UnpubVersion {
     this.version,
     this.pubspec,
     this.pubspecYaml,
+    this.uploader,
     this.readme,
     this.changelog,
-    this.uploader,
     this.createdAt,
   );
 
@@ -36,8 +36,8 @@ class UnpubVersion {
 class UnpubPackage {
   final String name;
   final List<UnpubVersion> versions;
-  final List<String> uploaders;
   final bool private;
+  final List<String> uploaders;
 
   @JsonKey(fromJson: identity, toJson: identity)
   final DateTime createdAt;
@@ -59,4 +59,15 @@ class UnpubPackage {
 
   factory UnpubPackage.fromJson(Map<String, dynamic> map) =>
       _$UnpubPackageFromJson(map);
+}
+
+@JsonSerializable()
+class UnpubQueryResult {
+  int count;
+  List<UnpubPackage> packages;
+
+  UnpubQueryResult(this.count, this.packages);
+
+  factory UnpubQueryResult.fromJson(Map<String, dynamic> map) =>
+      _$UnpubQueryResultFromJson(map);
 }

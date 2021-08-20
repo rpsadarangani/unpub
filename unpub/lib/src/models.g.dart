@@ -10,9 +10,9 @@ UnpubVersion _$UnpubVersionFromJson(Map<String, dynamic> json) => UnpubVersion(
       json['version'] as String,
       json['pubspec'] as Map<String, dynamic>,
       json['pubspecYaml'] as String,
+      json['uploader'] as String,
       json['readme'] as String?,
       json['changelog'] as String?,
-      json['uploader'] as String,
       identity(json['createdAt'] as DateTime),
     );
 
@@ -52,9 +52,23 @@ Map<String, dynamic> _$UnpubPackageToJson(UnpubPackage instance) =>
     <String, dynamic>{
       'name': instance.name,
       'versions': instance.versions,
-      'uploaders': instance.uploaders,
       'private': instance.private,
+      'uploaders': instance.uploaders,
       'createdAt': identity(instance.createdAt),
       'updatedAt': identity(instance.updatedAt),
       'download': instance.download,
+    };
+
+UnpubQueryResult _$UnpubQueryResultFromJson(Map<String, dynamic> json) =>
+    UnpubQueryResult(
+      json['count'] as int,
+      (json['packages'] as List<dynamic>)
+          .map((e) => UnpubPackage.fromJson(e as Map<String, dynamic>))
+          .toList(),
+    );
+
+Map<String, dynamic> _$UnpubQueryResultToJson(UnpubQueryResult instance) =>
+    <String, dynamic>{
+      'count': instance.count,
+      'packages': instance.packages,
     };

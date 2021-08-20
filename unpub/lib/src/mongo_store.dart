@@ -11,10 +11,46 @@ class MongoStore extends MetaStore {
 
   MongoStore(this.db);
 
-  SelectorBuilder _selectByName(String? name) => where.eq('name', name);
+  static SelectorBuilder _selectByName(String? name) => where.eq('name', name);
+
+  static SelectorBuilder _buildSearchSelector(String? keyword) {
+    if (keyword == null || keyword == '') return where;
+
+    final _keywordPrefixes = {
+      'email:': (String email) => where.eq('uploaders', email),
+      'package:': (String package) => where.match('name', '^$package.*'),
+      'dependency:': (String dependency) => where.raw({
+            // FIXME: raw
+            'versions': {
+              '\$elemMatch': {
+                'pubspec.dependencies.$dependency': {'\$exists': true}
+              }
+            }
+          }),
+    };
+
+    for (var entry in _keywordPrefixes.entries) {
+      if (keyword.startsWith(entry.key)) {
+        return entry.value(keyword.substring(entry.key.length).trim());
+      }
+    }
+
+    return where.match('name', '.*$keyword.*');
+  }
+
+  Future<UnpubQueryResult> _queryPackagesBySelector(
+      SelectorBuilder selector) async {
+    final count = await db.collection(packageCollection).count(selector);
+    final packages = await db
+        .collection(packageCollection)
+        .find(selector)
+        .map((item) => UnpubPackage.fromJson(item))
+        .toList();
+    return UnpubQueryResult(count, packages);
+  }
 
   @override
-  Future<UnpubPackage?> queryPackage(name) async {
+  queryPackage(name) async {
     var json =
         await db.collection(packageCollection).findOne(_selectByName(name));
     if (json == null) return null;
@@ -22,7 +58,7 @@ class MongoStore extends MetaStore {
   }
 
   @override
-  Future<void> addVersion(name, version) async {
+  addVersion(name, version) async {
     await db.collection(packageCollection).update(
         _selectByName(name),
         modify
@@ -36,21 +72,21 @@ class MongoStore extends MetaStore {
   }
 
   @override
-  Future<void> addUploader(name, email) async {
+  addUploader(name, email) async {
     await db
         .collection(packageCollection)
         .update(_selectByName(name), modify.push('uploaders', email));
   }
 
   @override
-  Future<void> removeUploader(name, email) async {
+  removeUploader(name, email) async {
     await db
         .collection(packageCollection)
         .update(_selectByName(name), modify.pull('uploaders', email));
   }
 
   @override
-  void increaseDownloads(name, version) {
+  increaseDownloads(name, version) {
     var today = DateFormat('yyyyMMdd').format(DateTime.now());
     db
         .collection(packageCollection)
@@ -60,46 +96,25 @@ class MongoStore extends MetaStore {
         .update(_selectByName(name), modify.inc('d$today', 1));
   }
 
-  static final _keywordPrefixes = {
-    'email:': (String email) => where.eq('uploaders', email),
-    'package:': (String package) => where.match('name', '^$package.*'),
-    'dependency:': (String dependency) => where.raw({
-          // FIXME: raw
-          'versions': {
-            '\$elemMatch': {
-              'pubspec.dependencies.$dependency': {'\$exists': true}
-            }
-          }
-        }),
-  };
-
-  SelectorBuilder _buildSearchSelector(String? q) {
-    if (q == null || q == '') return where;
-
-    for (var entry in _keywordPrefixes.entries) {
-      if (q.startsWith(entry.key)) {
-        return entry.value(q.substring(entry.key.length).trim());
-      }
+  @override
+  queryPackages(size, page, sort, keyword) async {
+    var selector =
+        where.sortBy(sort, descending: true).limit(size).skip(page * size);
+    if (keyword != null) {
+      selector = selector.match('name', '.*$keyword.*');
     }
 
-    return where.match('name', '.*$q.*');
+    return _queryPackagesBySelector(selector);
   }
 
   @override
-  Future<int> queryCount(q) {
-    return db.collection(packageCollection).count(_buildSearchSelector(q));
-  }
-
-  @override
-  Stream<UnpubPackage> queryPackages(size, page, sort, q) {
-    var selector = _buildSearchSelector(q)
+  queryPackagesByUploader(size, page, sort, email) {
+    var selector = where
+        .eq('uploaders', email)
         .sortBy(sort, descending: true)
         .limit(size)
         .skip(page * size);
 
-    return db
-        .collection(packageCollection)
-        .find(selector)
-        .map((item) => UnpubPackage.fromJson(item));
+    return _queryPackagesBySelector(selector);
   }
 }
