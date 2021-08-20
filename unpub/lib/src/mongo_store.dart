@@ -13,31 +13,6 @@ class MongoStore extends MetaStore {
 
   static SelectorBuilder _selectByName(String? name) => where.eq('name', name);
 
-  static SelectorBuilder _buildSearchSelector(String? keyword) {
-    if (keyword == null || keyword == '') return where;
-
-    final _keywordPrefixes = {
-      'email:': (String email) => where.eq('uploaders', email),
-      'package:': (String package) => where.match('name', '^$package.*'),
-      'dependency:': (String dependency) => where.raw({
-            // FIXME: raw
-            'versions': {
-              '\$elemMatch': {
-                'pubspec.dependencies.$dependency': {'\$exists': true}
-              }
-            }
-          }),
-    };
-
-    for (var entry in _keywordPrefixes.entries) {
-      if (keyword.startsWith(entry.key)) {
-        return entry.value(keyword.substring(entry.key.length).trim());
-      }
-    }
-
-    return where.match('name', '.*$keyword.*');
-  }
-
   Future<UnpubQueryResult> _queryPackagesBySelector(
       SelectorBuilder selector) async {
     final count = await db.collection(packageCollection).count(selector);
@@ -111,6 +86,23 @@ class MongoStore extends MetaStore {
   queryPackagesByUploader(size, page, sort, email) {
     var selector = where
         .eq('uploaders', email)
+        .sortBy(sort, descending: true)
+        .limit(size)
+        .skip(page * size);
+
+    return _queryPackagesBySelector(selector);
+  }
+
+  @override
+  queryPackagesByDependency(size, page, sort, dependency) {
+    var selector = where
+        .raw({
+          'versions': {
+            r'$elemMatch': {
+              'pubspec.dependencies.$dependency': {r'$exists': true}
+            }
+          }
+        })
         .sortBy(sort, descending: true)
         .limit(size)
         .skip(page * size);

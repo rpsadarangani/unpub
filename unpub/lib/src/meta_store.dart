@@ -16,4 +16,7 @@ abstract class MetaStore {
 
   Future<UnpubQueryResult> queryPackagesByUploader(
       int size, int page, String sort, String email);
+
+  Future<UnpubQueryResult> queryPackagesByDependency(
+      int size, int page, String sort, String dependency);
 }
