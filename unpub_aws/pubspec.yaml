@@ -1,7 +1,7 @@
 name: unpub_aws
-
+version: 1.0.0
 environment:
-  sdk: '>=2.12.0 <3.0.0'
+  sdk: ">=2.12.0 <3.0.0"
 
 dependencies:
   unpub: ^2.0.0
