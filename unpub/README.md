@@ -100,13 +100,9 @@ var app = unpub.App(
 );
 ```
 
-## AWS Extras
-This package also includes AWS specific Package and Meta stores. 
+#### Available Package Stores
 
-##### 1. [S3 File Storage](https://github.com/bytedance/unpub/blob/master/unpub/lib/unpub_aws/README.md#s3-file-storage)
-
-
-
+1. [unpub_aws](https://github.com/bytedance/unpub/tree/master/unpub_aws): AWS S3 package store, maintained by [@CleanCode](https://github.com/Clean-Cole).
 
 ## Badges
 
