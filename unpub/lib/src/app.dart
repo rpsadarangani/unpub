@@ -285,12 +285,12 @@ class App {
 
       // Package already exists
       if (package != null) {
-        if (package.private != true) {
+        if (package.private == false) {
           throw '$name is not a private package. Please upload it to https://pub.dev';
         }
 
         // Check uploaders
-        if (!package.uploaders.contains(uploader)) {
+        if (package.uploaders?.contains(uploader) == false) {
           throw '$uploader is not an uploader of $name';
         }
 
@@ -352,10 +352,10 @@ class App {
     var operatorEmail = await _getUploaderEmail(req);
     var package = await metaStore.queryPackage(name);
 
-    if (package?.uploaders.contains(operatorEmail) != true) {
+    if (package?.uploaders?.contains(operatorEmail) == false) {
       return _badRequest('no permission', status: HttpStatus.forbidden);
     }
-    if (package?.uploaders.contains(email) == true) {
+    if (package?.uploaders?.contains(email) == true) {
       return _badRequest('email already exists');
     }
 
@@ -371,10 +371,10 @@ class App {
     var package = await metaStore.queryPackage(name);
 
     // TODO: null
-    if (!package!.uploaders.contains(operatorEmail)) {
+    if (package?.uploaders?.contains(operatorEmail) == false) {
       return _badRequest('no permission', status: HttpStatus.forbidden);
     }
-    if (!package.uploaders.contains(email)) {
+    if (package?.uploaders?.contains(email) == false) {
       return _badRequest('email not uploader');
     }
 
@@ -475,7 +475,7 @@ class App {
       packageVersion.version,
       packageVersion.pubspec['description'] ?? '',
       packageVersion.pubspec['homepage'] ?? '',
-      package.uploaders,
+      package.uploaders ?? [],
       packageVersion.createdAt,
       packageVersion.readme,
       packageVersion.changelog,

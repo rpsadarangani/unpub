@@ -9,7 +9,7 @@ part of 'models.dart';
 UnpubVersion _$UnpubVersionFromJson(Map<String, dynamic> json) => UnpubVersion(
       json['version'] as String,
       json['pubspec'] as Map<String, dynamic>,
-      json['pubspecYaml'] as String,
+      json['pubspecYaml'] as String?,
       json['uploader'] as String?,
       json['readme'] as String?,
       json['changelog'] as String?,
@@ -20,7 +20,6 @@ Map<String, dynamic> _$UnpubVersionToJson(UnpubVersion instance) {
   final val = <String, dynamic>{
     'version': instance.version,
     'pubspec': instance.pubspec,
-    'pubspecYaml': instance.pubspecYaml,
   };
 
   void writeNotNull(String key, dynamic value) {
@@ -29,6 +28,7 @@ Map<String, dynamic> _$UnpubVersionToJson(UnpubVersion instance) {
     }
   }
 
+  writeNotNull('pubspecYaml', instance.pubspecYaml);
   writeNotNull('uploader', instance.uploader);
   writeNotNull('readme', instance.readme);
   writeNotNull('changelog', instance.changelog);
@@ -42,7 +42,7 @@ UnpubPackage _$UnpubPackageFromJson(Map<String, dynamic> json) => UnpubPackage(
           .map((e) => UnpubVersion.fromJson(e as Map<String, dynamic>))
           .toList(),
       json['private'] as bool,
-      (json['uploaders'] as List<dynamic>).map((e) => e as String).toList(),
+      (json['uploaders'] as List<dynamic>?)?.map((e) => e as String).toList(),
       identity(json['createdAt'] as DateTime),
       identity(json['updatedAt'] as DateTime),
       json['download'] as int?,
