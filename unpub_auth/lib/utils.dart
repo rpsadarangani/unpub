@@ -25,7 +25,9 @@ class Utils {
     } else {
       configDir = path.join(Platform.environment['HOME'] ?? '', '.config');
     }
-    return path.join(configDir, r'unpub-auth');
+    final p = path.join(configDir, r'unpub-auth');
+    Directory(p).createSync();
+    return p;
   }();
 
   static Future<HttpServer> bindServer(String host, int port) async {
