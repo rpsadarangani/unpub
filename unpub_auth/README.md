@@ -9,10 +9,10 @@ Since Dart 2.15:
 
 So the self-hosted pub server should have its own auth flow. unpub is using Google OAuth2 by default.
 
-`unpub_auth login` will generate `unpub-credentials.json` locally after developer login the `unpub_auth`.
-Before calling `dart pub publish` or `flutter pub publish`, please call `unpub_auth get | dart pub token add <self-hosted-pub-server>` first.
-`unpub_auth get` will refresh the token. New accessToken will be write to `pub-tokens.json` by `dart pub token add <self-hosted-pub-server>`.
-So you can always use a valid accessToken in `dart pub publish` and `flutter pub publish`.
+- `unpub_auth login` will generate `unpub-credentials.json` locally after developer login the `unpub_auth`.
+- Before calling `dart pub publish` or `flutter pub publish`, please call `unpub_auth get | dart pub token add <self-hosted-pub-server>` first.
+- `unpub_auth get` will refresh the token. New accessToken will be write to `pub-tokens.json` by `dart pub token add <self-hosted-pub-server>`.
+- So you can always use a valid accessToken in `dart pub publish` and `flutter pub publish`.
 
 ## Usage
 
@@ -20,16 +20,16 @@ So you can always use a valid accessToken in `dart pub publish` and `flutter pub
 
 unpub is using Google OAuth2 by default. There's two situations where the unpub_auth can be used.
 
-1. Login locally, and publish pub packages locally.
-  step 1. Call `unpub_auth login` when you first use it, and it will save credentials locally.
-  step 2. Before calling `dart pub publish` or `flutter pub publish`, call `unpub_auth get | dart pub token add <self-hosted-pub-server>`
+- Login locally, and publish pub packages locally.
+  1. Call `unpub_auth login` when you first use it, and it will save credentials locally.
+  2. Before calling `dart pub publish` or `flutter pub publish`, call `unpub_auth get | dart pub token add <self-hosted-pub-server>`
 
-2. Login locally, and publish pub packages from CI/CD.
-   On CI/CD host device, you may not have opportunity to call `unpub_auth login`, so you can use `unpub_auth migrate` to migrate the credentials file.
-  step 1. In local device, call `unpub_auth login` when you first use it, and it will save credentials locally.
-  step 2. Copy the credentials file which was generated in step 1 to CI/CD device.
-  step 3. In CI/CD device, call `unpub_auth migrate <credentials-file-path>`, so the CI/CD will have the same credentials file.
-  step 4. In CI/CD device, before calling `dart pub publish` or `flutter pub publish`, call `unpub_auth get | dart pub token add <self-hosted-pub-server>`
+- Login locally, and publish pub packages from CI/CD.
+  On CI/CD host device, you may not have opportunity to call `unpub_auth login`, so you can use `unpub_auth migrate` to migrate the credentials file.
+  1. In local device, call `unpub_auth login` when you first use it, and it will save credentials locally.
+  2. Copy the credentials file which was generated in step 1 to CI/CD device.
+  3. In CI/CD device, call `unpub_auth migrate <credentials-file-path>`, so the CI/CD will have the same credentials file.
+  4. In CI/CD device, before calling `dart pub publish` or `flutter pub publish`, call `unpub_auth get | dart pub token add <self-hosted-pub-server>`
 
 Usage: unpub_auth <command> [arguments]
 
