@@ -1,3 +1,7 @@
+## 0.1.0+2
+
+- Fix documents format.
+
 ## 0.1.0+1
 
 - Fix documents format.
