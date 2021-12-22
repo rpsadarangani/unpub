@@ -31,6 +31,7 @@ unpub is using Google OAuth2 by default. There's two situations where the unpub_
   3. In CI/CD device, call `unpub_auth migrate <credentials-file-path>`, so the CI/CD will have the same credentials file.
   4. In CI/CD device, before calling `dart pub publish` or `flutter pub publish`, call `unpub_auth get | dart pub token add <self-hosted-pub-server>`
 
+```
 Usage: unpub_auth <command> [arguments]
 
 Available commands:
@@ -38,6 +39,7 @@ Available commands:
   login           Login unpub_auth on Google APIs.
   logout          Delete local credentials file.
   migrate <path>  Migrate existed credentials file from path.
+```
 
 ### Install and run
 
