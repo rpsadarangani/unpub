@@ -426,6 +426,26 @@ class App {
     return _okWithJson({'data': data.toJson()});
   }
 
+  @Route.get('/packages/<name>.json')
+  Future<shelf.Response> getPackageVersions(
+      shelf.Request req, String name) async {
+    var package = await metaStore.queryPackage(name);
+    if (package == null) {
+      return _badRequest('package not exists', status: HttpStatus.notFound);
+    }
+
+    var versions = package.versions.map((v) => v.version).toList();
+    versions.sort((a, b) {
+      return semver.Version.prioritize(
+          semver.Version.parse(b), semver.Version.parse(a));
+    });
+
+    return _okWithJson({
+      'name': name,
+      'versions': versions,
+    });
+  }
+
   @Route.get('/webapi/package/<name>/<version>')
   Future<shelf.Response> getPackageDetail(
       shelf.Request req, String name, String version) async {
