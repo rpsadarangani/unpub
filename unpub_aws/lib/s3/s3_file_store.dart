@@ -1,83 +1,76 @@
 import 'dart:async';
 import 'dart:io';
-import 'dart:typed_data';
 
-import 'package:minio/minio.dart';
 import 'package:unpub/unpub.dart';
 
-import '../core/aws_credentials.dart';
+import '../core/credential_chain.dart';
+import 's3_client.dart';
 
-/// Use an AWS S3 bucket (or S3-compatible endpoint like MinIO) as a package store.
+/// Tarball (`PackageStore`) backed by S3.
+///
+/// Uses the in-house [S3Client] (raw HTTPS + SigV4) so the store works
+/// out of the box with IRSA / STS web-identity / refreshing session
+/// tokens — the upstream minio Dart client does not include
+/// `X-Amz-Security-Token` on standard PUT/GET headers, which makes it
+/// useless for IRSA-issued temporary credentials.
 class S3Store extends PackageStore {
+  /// Optional override for tarball key layout. Default:
+  /// `<name>/<name>-<version>.tar.gz`.
   String Function(String name, String version)? getObjectPath;
 
-  String bucketName;
-  String? region;
-  String? endpoint;
-  AwsCredentials? credentials;
-  Minio? minio;
-  Map<String, String>? environment;
+  final String bucketName;
+  final String region;
+  final String? endpoint;
+  final AwsCredentialChain credentials;
+  S3Client client;
 
   S3Store(
     this.bucketName, {
-    this.region,
+    String? region,
     this.getObjectPath,
     this.endpoint,
-    this.credentials,
-    this.minio,
-    this.environment,
-  }) {
-    final env = environment ?? Platform.environment;
-    credentials ??= AwsCredentials(environment: env);
+    AwsCredentialChain? credentials,
+    Map<String, String>? environment,
+    S3Client? client,
+  })  : region = region ??
+            (environment ?? Platform.environment)['AWS_DEFAULT_REGION'] ??
+            (environment ?? Platform.environment)['AWS_REGION'] ??
+            (throw ArgumentError(
+                'S3Store: AWS_DEFAULT_REGION (or AWS_REGION) is required.')),
+        credentials = credentials ?? AwsCredentialChain(environment: environment),
+        client = client ??
+            S3Client(
+              bucket: bucketName,
+              region: region ??
+                  (environment ?? Platform.environment)['AWS_DEFAULT_REGION'] ??
+                  (environment ?? Platform.environment)['AWS_REGION']!,
+              credentials:
+                  credentials ?? AwsCredentialChain(environment: environment),
+              endpoint: endpoint,
+            );
 
-    final endpointUrl = endpoint ?? env['AWS_S3_ENDPOINT'] ?? 'https://s3.amazonaws.com';
-    final parsed = Uri.parse(endpointUrl.startsWith('http')
-        ? endpointUrl
-        : 'https://$endpointUrl');
-
-    minio ??= Minio(
-      endPoint: parsed.host,
-      port: parsed.hasPort ? parsed.port : null,
-      useSSL: parsed.scheme == 'https',
-      region: region ?? env['AWS_DEFAULT_REGION'] ?? env['AWS_REGION'],
-      accessKey: credentials!.awsAccessKeyId ?? '',
-      secretKey: credentials!.awsSecretAccessKey ?? '',
-      sessionToken: credentials!.awsSessionToken,
-    );
-
-    if (region == null &&
-        (env['AWS_DEFAULT_REGION']?.isEmpty ?? true) &&
-        (env['AWS_REGION']?.isEmpty ?? true)) {
-      throw ArgumentError('Could not determine a default region for aws.');
-    }
-  }
-
-  String _getObjectKey(String name, String version) =>
+  String _key(String name, String version) =>
       getObjectPath?.call(name, version) ?? '$name/$name-$version.tar.gz';
 
   @override
   Future<void> upload(String name, String version, List<int> content) async {
-    await minio!.putObject(
-      bucketName,
-      _getObjectKey(name, version),
-      Stream.value(Uint8List.fromList(content)),
+    await client.putObject(
+      _key(name, version),
+      content,
+      contentType: 'application/gzip',
     );
   }
 
   @override
   Stream<List<int>> download(String name, String version) async* {
-    final stream =
-        await minio!.getObject(bucketName, _getObjectKey(name, version));
-    yield* stream;
+    final res = await client.getObject(_key(name, version));
+    if (!res.exists || res.body == null) {
+      throw 'S3Store: object ${_key(name, version)} not found';
+    }
+    yield res.body!;
   }
 
   @override
-  Future<bool> exists(String name, String version) async {
-    try {
-      await minio!.statObject(bucketName, _getObjectKey(name, version));
-      return true;
-    } catch (_) {
-      return false;
-    }
-  }
+  Future<bool> exists(String name, String version) =>
+      client.headObject(_key(name, version));
 }
