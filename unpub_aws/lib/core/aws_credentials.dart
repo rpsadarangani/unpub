@@ -1,56 +1,30 @@
-import 'dart:cli';
 import 'dart:io';
-import 'dart:convert';
 
-import 'package:http/http.dart' as http;
-
+/// Static AWS credential holder. Resolves from constructor args or env vars.
+///
+/// For dynamic resolution (IRSA, refreshing creds) see [AwsCredentialChain].
 class AwsCredentials {
   String? awsAccessKeyId;
   String? awsSecretAccessKey;
   String? awsSessionToken;
   Map<String, String>? environment;
-  Map<String, String>? containerCredentials;
 
-  AwsCredentials(
-      {this.awsAccessKeyId,
-      this.awsSecretAccessKey,
-      this.awsSessionToken,
-      this.environment,
-      this.containerCredentials}) {
-
+  AwsCredentials({
+    this.awsAccessKeyId,
+    this.awsSecretAccessKey,
+    this.awsSessionToken,
+    this.environment,
+  }) {
     final env = environment ?? Platform.environment;
     environment ??= Platform.environment;
-    awsAccessKeyId = awsAccessKeyId ?? env['AWS_ACCESS_KEY_ID'];
-    awsSecretAccessKey = awsSecretAccessKey ?? env['AWS_SECRET_ACCESS_KEY'];
-
-    var isInContainer = env['AWS_CONTAINER_CREDENTIALS_RELATIVE_URI'];
-
-    if ((isInContainer != null || containerCredentials != null) &&
-        (awsAccessKeyId == null && awsSecretAccessKey == null)) {
-      var data = containerCredentials ?? waitFor(getContainerCredentials(env));
-      if (data != null) {
-        awsAccessKeyId = data['AccessKeyId'];
-        awsSecretAccessKey = data['SecretAccessKey'];
-        awsSessionToken = data['Token'];
-      }
-    }
+    awsAccessKeyId ??= env['AWS_ACCESS_KEY_ID'];
+    awsSecretAccessKey ??= env['AWS_SECRET_ACCESS_KEY'];
+    awsSessionToken ??= env['AWS_SESSION_TOKEN'];
 
     if (awsAccessKeyId == null || awsSecretAccessKey == null) {
       throw ArgumentError(
-          'You must provide a valid Access Key and Secret for AWS.');
-    }
-  }
-
-  Future<Map<String, String>?> getContainerCredentials(
-      Map<String, String> environment) async {
-    try {
-      var relativeUri =
-          environment['AWS_CONTAINER_CREDENTIALS_RELATIVE_URI'] ?? '';
-      var url = Uri.parse('http://169.254.170.2$relativeUri');
-      var response = await http.read(url);
-      return json.decode(response);
-    } catch (e) {
-      print('failed to get container credentials.');
+          'AwsCredentials: provide AWS_ACCESS_KEY_ID + AWS_SECRET_ACCESS_KEY '
+          '(env vars or constructor). For IRSA, use AwsCredentialChain.');
     }
   }
 }

@@ -1,7 +1,7 @@
 # syntax=docker/dockerfile:1.6
 
 # ---------- builder ----------
-FROM dart:2.19 AS builder
+FROM dart:stable AS builder
 
 WORKDIR /src
 

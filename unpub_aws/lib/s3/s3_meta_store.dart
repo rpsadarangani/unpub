@@ -4,6 +4,7 @@ import 'dart:math';
 
 import 'package:unpub/unpub.dart';
 
+import '../dynamodb/dynamo_meta_store.dart' show DailyDownloadStats;
 import 's3_client.dart';
 
 /// Iceberg-inspired metadata store backed by S3.
@@ -36,8 +37,8 @@ class S3MetaStore extends MetaStore {
     if (pointer == null) return null;
     final snap = await client.getObject('$prefix/packages/$name/${pointer.snapshot}');
     if (!snap.exists) return null;
-    return UnpubPackage.fromJson(
-        json.decode(snap.bodyAsString()!) as Map<String, dynamic>);
+    return UnpubPackage.fromJson(_restorePackageJson(
+        json.decode(snap.bodyAsString()!) as Map<String, dynamic>));
   }
 
   @override
@@ -48,7 +49,7 @@ class S3MetaStore extends MetaStore {
     try {
       await client.putObject(
         versionKey,
-        utf8.encode(json.encode(version.toJson())),
+        utf8.encode(json.encode(_normalizeJson(version.toJson()))),
         contentType: 'application/json',
         ifNoneMatch: '*',
       );
@@ -131,8 +132,7 @@ class S3MetaStore extends MetaStore {
   void increaseDownloads(String name, String version) {
     // Fire-and-forget append-only event. Aggregated out-of-band.
     final ts = DateTime.now().toUtc();
-    final date =
-        '${ts.year}-${ts.month.toString().padLeft(2, '0')}-${ts.day.toString().padLeft(2, '0')}';
+    final date = _isoDate(ts);
     final key = '$prefix/downloads/$date/$name-${_randomId()}.json';
     final body = utf8.encode(json.encode({
       'name': name,
@@ -144,6 +144,70 @@ class S3MetaStore extends MetaStore {
             contentType: 'application/json', ifNoneMatch: '*')
         .catchError((_) => '');
   }
+
+  /// Aggregate raw download events for a given package + date by listing
+  /// `meta/downloads/<date>/<name>-*.json` and counting hits. O(N) reads
+  /// — meant for ad-hoc queries or a periodic compactor that writes the
+  /// rolled-up counts to `meta/stats/<name>/<date>.json`.
+  Future<DailyDownloadStats> aggregateDailyDownloads(
+      String name, DateTime date) async {
+    final iso = _isoDate(date);
+    final prefixPath = '$prefix/downloads/$iso/$name-';
+    final perVersion = <String, int>{};
+    var total = 0;
+    String? token;
+    do {
+      final res = await client.listObjects(
+        prefix: prefixPath,
+        continuationToken: token,
+      );
+      for (final entry in res.contents) {
+        final body = await client.getObject(entry.key);
+        if (!body.exists) continue;
+        final ev =
+            json.decode(body.bodyAsString()!) as Map<String, dynamic>;
+        final v = (ev['version'] as String?) ?? 'unknown';
+        perVersion[v] = (perVersion[v] ?? 0) + 1;
+        total++;
+      }
+      token = res.nextContinuationToken;
+    } while (token != null);
+    return DailyDownloadStats(
+      name: name,
+      date: iso,
+      total: total,
+      perVersion: perVersion,
+    );
+  }
+
+  /// Persist a rolled-up daily count under `meta/stats/<name>/<yyyy-mm-dd>.json`.
+  /// Idempotent: overwrites any prior aggregate for the same date.
+  Future<void> persistDailyStats(DailyDownloadStats stats) async {
+    final key = '$prefix/stats/${stats.name}/${stats.date}.json';
+    await client.putObject(
+      key,
+      utf8.encode(json.encode(stats.toJson())),
+      contentType: 'application/json',
+    );
+  }
+
+  /// Read a persisted daily rollup. Returns null if no rollup yet for date.
+  Future<DailyDownloadStats?> readDailyStats(String name, DateTime date) async {
+    final iso = _isoDate(date);
+    final res = await client.getObject('$prefix/stats/$name/$iso.json');
+    if (!res.exists) return null;
+    final m = json.decode(res.bodyAsString()!) as Map<String, dynamic>;
+    return DailyDownloadStats(
+      name: m['name'] as String,
+      date: m['date'] as String,
+      total: (m['total'] as int?) ?? 0,
+      perVersion:
+          ((m['perVersion'] as Map?) ?? const {}).cast<String, int>(),
+    );
+  }
+
+  String _isoDate(DateTime d) =>
+      '${d.year}-${d.month.toString().padLeft(2, '0')}-${d.day.toString().padLeft(2, '0')}';
 
   @override
   Future<UnpubQueryResult> queryPackages({
@@ -216,8 +280,8 @@ class S3MetaStore extends MetaStore {
         final snap =
             await client.getObject('$prefix/packages/$name/${pointer.snapshot}');
         if (snap.exists) {
-          existing = UnpubPackage.fromJson(
-              json.decode(snap.bodyAsString()!) as Map<String, dynamic>);
+          existing = UnpubPackage.fromJson(_restorePackageJson(
+              json.decode(snap.bodyAsString()!) as Map<String, dynamic>));
         }
       }
 
@@ -329,13 +393,50 @@ class S3MetaStore extends MetaStore {
 
   Map<String, dynamic> _packageToJson(UnpubPackage p) => {
         'name': p.name,
-        'versions': p.versions.map((v) => v.toJson()).toList(),
+        'versions': p.versions.map((v) => _normalizeJson(v.toJson())).toList(),
         'private': p.private,
         'uploaders': p.uploaders,
         'createdAt': p.createdAt.toIso8601String(),
         'updatedAt': p.updatedAt.toIso8601String(),
         'download': p.download ?? 0,
       };
+
+  /// Recursively turn DateTime values into ISO-8601 strings so `json.encode`
+  /// accepts the payload. UnpubVersion.toJson() leaves DateTimes raw because
+  /// the upstream models use identity fromJson/toJson converters.
+  dynamic _normalizeJson(dynamic value) {
+    if (value is DateTime) return value.toUtc().toIso8601String();
+    if (value is Map) {
+      return value.map((k, v) => MapEntry(k, _normalizeJson(v)));
+    }
+    if (value is List) return value.map(_normalizeJson).toList();
+    return value;
+  }
+
+  /// Inverse of [_normalizeJson] — convert known timestamp fields back to
+  /// DateTime so `UnpubVersion.fromJson` (identity caster) doesn't fail.
+  Map<String, dynamic> _restorePackageJson(Map<String, dynamic> raw) {
+    final restored = <String, dynamic>{...raw};
+    if (restored['createdAt'] is String) {
+      restored['createdAt'] = DateTime.parse(restored['createdAt'] as String);
+    }
+    if (restored['updatedAt'] is String) {
+      restored['updatedAt'] = DateTime.parse(restored['updatedAt'] as String);
+    }
+    if (restored['versions'] is List) {
+      restored['versions'] = (restored['versions'] as List).map((v) {
+        if (v is Map<String, dynamic>) {
+          final m = <String, dynamic>{...v};
+          if (m['createdAt'] is String) {
+            m['createdAt'] = DateTime.parse(m['createdAt'] as String);
+          }
+          return m;
+        }
+        return v;
+      }).toList();
+    }
+    return restored;
+  }
 
   String _latestVersion(UnpubPackage p) =>
       p.versions.isEmpty ? '' : p.versions.last.version;

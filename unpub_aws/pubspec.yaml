@@ -7,11 +7,11 @@ environment:
 
 dependencies:
   unpub: ^2.0.0
-  minio: ^3.0.0
+  minio: ">=3.0.0 <3.5.2"
   http: ^0.13.3
   crypto: ^3.0.0
   convert: ^3.0.0
-  xml: ^6.1.0
+  xml: ^5.4.1
   json_annotation: ^4.1.0
   collection: ^1.15.0
 

@@ -33,6 +33,7 @@ Future<void> main(List<String> args) async {
       region: region,
       endpoint: env['AWS_S3_ENDPOINT'],
     ),
+    overrideUploaderEmail: env['UNPUB_OVERRIDE_UPLOADER'],
   );
 
   final port = int.parse(env['UNPUB_PORT'] ?? '4000');

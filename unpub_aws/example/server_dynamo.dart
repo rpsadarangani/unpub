@@ -24,13 +24,6 @@ Future<void> main(List<String> args) async {
 
   final credentials = aws.AwsCredentialChain();
 
-  final s3 = aws.S3Client(
-    bucket: bucket,
-    region: region,
-    credentials: credentials,
-    endpoint: env['AWS_S3_ENDPOINT'],
-  );
-
   final ddb = aws.DynamoClient(
     region: region,
     credentials: credentials,
@@ -44,6 +37,7 @@ Future<void> main(List<String> args) async {
       region: region,
       endpoint: env['AWS_S3_ENDPOINT'],
     ),
+    overrideUploaderEmail: env['UNPUB_OVERRIDE_UPLOADER'],
   );
 
   final port = int.parse(env['UNPUB_PORT'] ?? '4000');
