@@ -22,9 +22,9 @@ helm install unpub oci://ghcr.io/rpsadarangani/charts/unpub \
   --version 0.1.0 \
   --namespace devtools --create-namespace \
   --set aws.region=ap-south-1 \
-  --set aws.bucket=unpub-packages \
+  --set aws.bucket=my-unpub-packages \
   --set aws.ddbTable=unpub-packages \
-  --set 'serviceAccount.annotations.eks\.amazonaws\.com/role-arn=arn:aws:iam::000000000000:role/unpub-non-prod'
+  --set 'serviceAccount.annotations.eks\.amazonaws\.com/role-arn=arn:aws:iam::ACCT:role/unpub'
 
 # Or install from a local checkout
 helm install unpub ./charts/unpub -n devtools -f my-values.yaml
@@ -66,7 +66,7 @@ Both modes share the same S3 bucket layout for tarballs (`packages/<name>/<name>
 serviceAccount:
   create: true
   annotations:
-    eks.amazonaws.com/role-arn: arn:aws:iam::000000000000:role/unpub-non-prod
+    eks.amazonaws.com/role-arn: arn:aws:iam::ACCOUNT_ID:role/unpub
 ```
 
 The pod-identity webhook injects `AWS_ROLE_ARN` + `AWS_WEB_IDENTITY_TOKEN_FILE`. unpub's `AwsCredentialChain` calls STS `AssumeRoleWithWebIdentity` and refreshes the credential at 80% of the token TTL.
@@ -85,11 +85,11 @@ externalSecret:
   data:
     - envVar: AWS_ACCESS_KEY_ID
       remoteRef:
-        key: /non-prod/infra/unpub-aws-creds
+        key: /infra/unpub-aws-creds
         property: access_key_id
     - envVar: AWS_SECRET_ACCESS_KEY
       remoteRef:
-        key: /non-prod/infra/unpub-aws-creds
+        key: /infra/unpub-aws-creds
         property: secret_access_key
 ```
 
@@ -118,8 +118,8 @@ istio:
 
 The pod always exposes Prometheus metrics on `:4000/metrics`. The chart ships two ways to scrape them:
 
-| `serviceMonitor.enabled` | Prometheus Operator (kube-prometheus-stack) picks it up automatically |
-| `podAnnotations.prometheus.io/scrape` | Vanilla pod-scrape annotations for the plain-Prometheus configs that look at them |
+| `vmServiceScrape.enabled` | VictoriaMetrics Operator picks it up automatically |
+| `podAnnotations.prometheus.io/scrape` | Vanilla pod-scrape annotations for plain-Prometheus configs |
 
 Key series:
 

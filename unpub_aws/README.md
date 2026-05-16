@@ -15,7 +15,7 @@ Credential resolution supports static keys, ECS task-role env vars, and **EKS IR
 
 | Component | Purpose |
 |---|---|
-| `S3Store` | Tarball (`PackageStore`) backed by S3 / MinIO / any S3-compatible endpoint |
+| `S3Store` | Tarball (`PackageStore`) on top of `S3Client` — IRSA-aware, signs each request with `X-Amz-Security-Token` |
 | `S3MetaStore` | Iceberg-style `MetaStore` on S3 — immutable snapshots + CAS-swapped pointer |
 | `DynamoMetaStore` | `MetaStore` on DynamoDB with atomic counters and GSI-backed listing |
 | `S3Client` | Low-level SigV4 S3 client with conditional writes (`If-Match`, `If-None-Match`) |

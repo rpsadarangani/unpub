@@ -30,6 +30,38 @@ A self-hosted private **Dart / Flutter pub server** with **AWS-native storage**,
 - **Prometheus-native observability.** `/metrics` exposes request histograms, cache hit/miss counters, fetch latency, in-flight gauges, and per-package upload/download counters — no extra deps in the binary.
 - **One small container.** Multi-arch AOT Dart binary, < 20 MB image, no JVM, no Node.
 
+## Using a deployed instance
+
+Once unpub is running, point any Dart / Flutter client at it with one env var:
+
+```sh
+export PUB_HOSTED_URL=https://unpub.example.internal
+
+# Consume packages (works for both pub.dev mirrors and your private uploads)
+dart pub get          # or:  flutter pub get
+
+# Publish a private package
+dart pub publish --server=$PUB_HOSTED_URL
+# or, in pubspec.yaml:
+#   publish_to: https://unpub.example.internal
+```
+
+In CI:
+
+```yaml
+# .github/workflows/*.yml
+env:
+  PUB_HOSTED_URL: https://unpub.example.internal
+```
+
+```dockerfile
+# Dockerfile
+ARG PUB_HOSTED_URL=https://unpub.example.internal
+ENV PUB_HOSTED_URL=$PUB_HOSTED_URL
+```
+
+The first time anyone fetches a given `<pkg>@<version>` the proxy pulls it from `pub.dev` and stores it in S3. Subsequent fetches stay entirely inside the VPC.
+
 ## Quickstart
 
 ### Run with Docker (local stack)
@@ -97,7 +129,15 @@ final app = unpub.App(
 - Concurrent first-fetches for the same package or `name@version` are deduped through in-memory inflight maps so cold-cache spikes only hit upstream once.
 - Subsequent requests are served entirely from your own store.
 
-Local benchmark on a clean DynamoDB table + MinIO: `http@1.4.0` first fetch **644 ms** end-to-end; warm fetch **22 ms**.
+Bench measured on EKS (IRSA, behind an Istio NLB) against a live S3 + DynamoDB cache. Cold = miss → `pub.dev` → S3 upload → serve; warm = single S3 GET.
+
+| Package | Size | Cold | Warm |
+|---|---:|---:|---:|
+| `path@1.9.1` | 44 KiB | 0.53 s | 0.41 s |
+| `firebase_core@4.9.0` | 259 KiB | 0.57 s | 0.48 s |
+| `flutter_local_notifications@21.0.0` | 710 KiB | 0.73 s | ~1 s |
+| `cloud_firestore@6.4.1` | 848 KiB | 1.45 s | 0.58 s |
+| `googleapis@16.0.0` | **9.4 MiB** | 3.18 s | **1.92 s** |
 
 ## Observability
 
@@ -116,7 +156,7 @@ unpub_uploads_total{package}                              counter
 unpub_downloads_total{package}                            counter
 ```
 
-Route labels are templates (`/api/packages/<name>` rather than concrete names), so the series count stays bounded as the catalogue grows. The Helm chart exposes a `serviceMonitor.enabled` toggle for Prometheus Operator users.
+Route labels are templates (`/api/packages/<name>` rather than concrete names), so the series count stays bounded as the catalogue grows. The Helm chart exposes a `vmServiceScrape.enabled` toggle (VictoriaMetrics Operator) — pod-annotation scraping works for vanilla Prometheus.
 
 ## Authentication
 
@@ -125,6 +165,8 @@ Route labels are templates (`/api/packages/<name>` rather than concrete names), 
 1. Explicit override (`AwsCredentialChain(override: AwsCredentials(...))`).
 2. **IRSA / Web Identity** — `AWS_ROLE_ARN` + `AWS_WEB_IDENTITY_TOKEN_FILE` (auto-injected by the EKS pod-identity webhook). STS `AssumeRoleWithWebIdentity`, refresh at 80% of the token TTL.
 3. Static env vars — `AWS_ACCESS_KEY_ID` + `AWS_SECRET_ACCESS_KEY` (+ optional `AWS_SESSION_TOKEN`).
+
+Both `S3Store` and `DynamoMetaStore` re-resolve through the chain on every operation, so STS-issued session tokens flow into the SigV4 `X-Amz-Security-Token` header on each S3 / DynamoDB call. **No periodic refresh hack is needed**, and the binary works out of the box on EKS with IRSA.
 
 The Helm chart supports both paths: IRSA via `serviceAccount.annotations`, static keys via `externalSecret.enabled` (works with both v1beta1 and v1 ExternalSecrets).
 
