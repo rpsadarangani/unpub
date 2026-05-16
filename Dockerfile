@@ -17,8 +17,8 @@ COPY . .
 RUN cd unpub && dart pub get && \
     cd ../unpub_aws && dart pub get
 
-# Compile to a native binary. We compile the example wired to S3 + DynamoDB.
-RUN dart compile exe unpub_aws/example/server_dynamo.dart -o /out/unpub-server
+# Compile the unified server (mode-selectable via --mode dynamo|s3only).
+RUN mkdir -p /out && dart compile exe unpub_aws/example/server.dart -o /out/unpub-server
 
 # ---------- runtime ----------
 FROM debian:bookworm-slim

@@ -1,0 +1,101 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "unpub.fullname" . }}
+  labels:
+    {{- include "unpub.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "unpub.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "unpub.selectorLabels" . | nindent 8 }}
+        {{- with .Values.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      annotations:
+        {{- with .Values.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+    spec:
+      serviceAccountName: {{ include "unpub.serviceAccountName" . }}
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext:
+        {{- toYaml .Values.securityContext | nindent 8 }}
+      containers:
+        - name: unpub
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          args: ["--mode", "{{ .Values.mode }}"]
+          securityContext:
+            {{- toYaml .Values.containerSecurityContext | nindent 12 }}
+          ports:
+            - name: http
+              containerPort: 4000
+              protocol: TCP
+          env:
+            - name: UNPUB_PORT
+              value: "4000"
+            - name: UNPUB_CACHE_UPSTREAM
+              value: {{ ternary "true" "false" .Values.cacheUpstream | quote }}
+            - name: UNPUB_UPSTREAM
+              value: {{ .Values.upstream | quote }}
+            - name: AWS_DEFAULT_REGION
+              value: {{ .Values.aws.region | quote }}
+            - name: UNPUB_BUCKET
+              value: {{ .Values.aws.bucket | quote }}
+            {{- if eq .Values.mode "dynamo" }}
+            - name: UNPUB_TABLE
+              value: {{ .Values.aws.ddbTable | quote }}
+            - name: UNPUB_STATS_TABLE
+              value: {{ .Values.aws.ddbStatsTable | quote }}
+            {{- end }}
+            {{- if .Values.aws.s3Endpoint }}
+            - name: AWS_S3_ENDPOINT
+              value: {{ .Values.aws.s3Endpoint | quote }}
+            {{- end }}
+            {{- if and (eq .Values.mode "dynamo") .Values.aws.ddbEndpoint }}
+            - name: AWS_DDB_ENDPOINT
+              value: {{ .Values.aws.ddbEndpoint | quote }}
+            {{- end }}
+            {{- range $k, $v := .Values.env }}
+            - name: {{ $k }}
+              value: {{ $v | quote }}
+            {{- end }}
+          {{- if .Values.externalSecret.enabled }}
+          envFrom:
+            - secretRef:
+                name: {{ include "unpub.fullname" . }}
+          {{- end }}
+          readinessProbe:
+            httpGet:
+              path: /
+              port: http
+            initialDelaySeconds: 3
+            periodSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 20
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}

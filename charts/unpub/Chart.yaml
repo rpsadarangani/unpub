@@ -1,0 +1,17 @@
+apiVersion: v2
+name: unpub
+description: Self-hosted private Dart pub server with S3 tarballs, DynamoDB/S3 metadata, and Athens-style upstream caching.
+type: application
+version: 0.1.0
+appVersion: "2.0.1"
+home: https://github.com/rpsadarangani/unpub
+sources:
+  - https://github.com/rpsadarangani/unpub
+maintainers:
+  - name: rpsadarangani
+keywords:
+  - dart
+  - flutter
+  - pub
+  - registry
+  - cache

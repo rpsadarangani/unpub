@@ -1,0 +1,62 @@
+name: test
+
+on:
+  push:
+    branches: [master, main, "feat/**"]
+  pull_request:
+    branches: [master, main]
+
+jobs:
+  dart:
+    name: dart analyze + test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dart-lang/setup-dart@v1
+        with:
+          sdk: "3.5.0"
+
+      - name: pub get (unpub)
+        working-directory: unpub
+        run: dart pub get
+
+      - name: pub get (unpub_aws)
+        working-directory: unpub_aws
+        run: dart pub get
+
+      - name: analyze unpub
+        working-directory: unpub
+        run: dart analyze --fatal-infos --fatal-warnings lib
+
+      - name: analyze unpub_aws
+        working-directory: unpub_aws
+        run: dart analyze --fatal-infos --fatal-warnings lib
+
+      - name: compile server
+        run: dart compile exe unpub_aws/example/server.dart -o /tmp/unpub-server
+
+  helm:
+    name: helm lint + template
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: azure/setup-helm@v4
+        with:
+          version: v3.16.2
+
+      - name: helm lint
+        run: helm lint charts/unpub
+
+      - name: helm template default
+        run: helm template ut charts/unpub > /dev/null
+
+      - name: helm template all features
+        run: |
+          helm template ut charts/unpub \
+            --set istio.enabled=true \
+            --set serviceMonitor.enabled=true \
+            --set externalSecret.enabled=true \
+            --set 'externalSecret.data[0].envVar=AWS_ACCESS_KEY_ID' \
+            --set 'externalSecret.data[0].remoteRef.key=/test/key' > /dev/null
