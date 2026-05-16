@@ -16,6 +16,25 @@ updates:
     commit-message:
       prefix: docker
 
+  - package-ecosystem: npm
+    directory: /unpub/web
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: deps(web)
+    groups:
+      vite:
+        patterns:
+          - "vite"
+          - "vite-plugin-*"
+          - "@vitejs/*"
+      vue:
+        patterns:
+          - "vue"
+          - "vue-*"
+          - "@vue/*"
+
   - package-ecosystem: pub
     directory: /unpub
     schedule:
