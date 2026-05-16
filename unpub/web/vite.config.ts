@@ -11,11 +11,6 @@ export default defineConfig({
     cssCodeSplit: false,
     assetsInlineLimit: 100_000_000,
     chunkSizeWarningLimit: 100_000_000,
-    rollupOptions: {
-      output: {
-        inlineDynamicImports: true,
-      },
-    },
     outDir: "dist",
     emptyOutDir: true,
   },

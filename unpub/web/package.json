@@ -14,11 +14,11 @@
   },
   "devDependencies": {
     "@types/node": "^20.19.41",
-    "@vitejs/plugin-vue": "^5.0.4",
+    "@vitejs/plugin-vue": "^6.0.7",
     "@vue/tsconfig": "^0.5.1",
     "typescript": "^5.4.5",
-    "vite": "^5.2.11",
-    "vite-plugin-singlefile": "^2.0.1",
+    "vite": "^8.0.13",
+    "vite-plugin-singlefile": "^2.3.3",
     "vue-tsc": "^2.0.16"
   }
 }
