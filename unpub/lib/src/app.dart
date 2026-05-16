@@ -864,7 +864,17 @@ class App {
   @Route.get('/webapi/package/<name>/<version>')
   Future<shelf.Response> getPackageDetail(
       shelf.Request req, String name, String version) async {
+    // `dart pub` URL-encodes `+` in versions (`17.2.1+1` -> `17.2.1%2B1`);
+    // shelf_router decodes once, but be defensive in case a client double-
+    // encodes.
+    try {
+      version = Uri.decodeComponent(version);
+    } catch (_) {/* leave as-is */}
+
     var package = await metaStore.queryPackage(name);
+    if (package == null && cacheUpstream) {
+      package = await _fetchAndCacheUpstreamPackage(name);
+    }
     if (package == null) {
       return _okWithJson({'error': 'package not exists'});
     }
@@ -875,12 +885,21 @@ class App {
     } else {
       packageVersion =
           package.versions.firstWhereOrNull((item) => item.version == version);
+      // Metadata may be stale (we cached an older snapshot); refresh once.
+      if (packageVersion == null && cacheUpstream) {
+        package = await _fetchAndCacheUpstreamPackage(name, force: true);
+        if (package != null) {
+          packageVersion = package.versions
+              .firstWhereOrNull((item) => item.version == version);
+        }
+      }
     }
-    if (packageVersion == null) {
+    if (packageVersion == null || package == null) {
       return _okWithJson({'error': 'version not exists'});
     }
+    final pkg = package;
 
-    var versions = package.versions
+    var versions = pkg.versions
         .map((v) => DetailViewVersion(v.version, v.createdAt))
         .toList();
     versions.sort((a, b) {
@@ -906,11 +925,11 @@ class App {
     var depMap = (pubspec['dependencies'] as Map? ?? {}).cast<String, String>();
 
     var data = WebapiDetailView(
-      package.name,
+      pkg.name,
       packageVersion.version,
       packageVersion.pubspec['description'] ?? '',
       packageVersion.pubspec['homepage'] ?? '',
-      package.uploaders ?? [],
+      pkg.uploaders ?? [],
       packageVersion.createdAt,
       packageVersion.readme,
       packageVersion.changelog,
