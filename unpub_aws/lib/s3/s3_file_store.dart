@@ -70,4 +70,14 @@ class S3Store extends PackageStore {
         await minio!.getObject(bucketName, _getObjectKey(name, version));
     yield* stream;
   }
+
+  @override
+  Future<bool> exists(String name, String version) async {
+    try {
+      await minio!.statObject(bucketName, _getObjectKey(name, version));
+      return true;
+    } catch (_) {
+      return false;
+    }
+  }
 }
