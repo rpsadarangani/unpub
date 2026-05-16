@@ -16,6 +16,7 @@ import 'package:archive/archive.dart';
 import 'package:unpub/src/models.dart';
 import 'package:unpub/unpub_api/lib/models.dart';
 import 'package:unpub/src/meta_store.dart';
+import 'package:unpub/src/metrics.dart';
 import 'package:unpub/src/package_store.dart';
 import 'utils.dart';
 import 'static/index.html.dart' as index_html;
@@ -69,6 +70,20 @@ class App {
   /// In-flight upstream tarball fetches keyed by `<name>@<version>`.
   final Map<String, Future<List<int>>> _inflightTarballs = {};
 
+  /// Prometheus metrics registry, exposed at `GET /metrics`.
+  late final Metrics metrics;
+
+  late final Counter _httpRequestsTotal;
+  late final Histogram _httpRequestDuration;
+  late final Counter _upstreamCacheHits;
+  late final Counter _upstreamCacheMisses;
+  late final Counter _upstreamDedupHits;
+  late final Histogram _upstreamFetchDuration;
+  late final Counter _uploadsTotal;
+  late final Counter _downloadsTotal;
+  late final Gauge _inflightMetaGauge;
+  late final Gauge _inflightTarballGauge;
+
   App({
     required this.metaStore,
     required this.packageStore,
@@ -80,7 +95,62 @@ class App {
     this.cacheUpstream = false,
     this.upstreamUploaderEmail,
     http.Client? upstreamClient,
-  }) : _upstreamClient = upstreamClient ?? http.Client();
+    Metrics? metrics,
+  }) : _upstreamClient = upstreamClient ?? http.Client() {
+    this.metrics = metrics ?? Metrics();
+    _registerMetrics();
+  }
+
+  void _registerMetrics() {
+    _httpRequestsTotal = metrics.counter(
+      name: 'unpub_http_requests_total',
+      help: 'Total HTTP requests served by unpub.',
+      labelNames: ['route', 'method', 'status'],
+    );
+    _httpRequestDuration = metrics.histogram(
+      name: 'unpub_http_request_duration_seconds',
+      help: 'HTTP request handler latency in seconds.',
+      labelNames: ['route', 'method'],
+    );
+    _upstreamCacheHits = metrics.counter(
+      name: 'unpub_upstream_cache_hits_total',
+      help: 'Cache-on-miss requests where the package was already in the local store.',
+      labelNames: ['kind'],
+    );
+    _upstreamCacheMisses = metrics.counter(
+      name: 'unpub_upstream_cache_misses_total',
+      help: 'Cache-on-miss requests where unpub had to fetch from upstream.',
+      labelNames: ['kind'],
+    );
+    _upstreamDedupHits = metrics.counter(
+      name: 'unpub_upstream_dedup_hits_total',
+      help: 'Concurrent fetches that were collapsed onto an in-flight upstream call.',
+      labelNames: ['kind'],
+    );
+    _upstreamFetchDuration = metrics.histogram(
+      name: 'unpub_upstream_fetch_duration_seconds',
+      help: 'Time spent fetching a package from the upstream registry.',
+      labelNames: ['kind'],
+    );
+    _uploadsTotal = metrics.counter(
+      name: 'unpub_uploads_total',
+      help: 'Successful publish requests (excluding upstream mirrors).',
+      labelNames: ['package'],
+    );
+    _downloadsTotal = metrics.counter(
+      name: 'unpub_downloads_total',
+      help: 'Tarball downloads served from the local store.',
+      labelNames: ['package'],
+    );
+    _inflightMetaGauge = metrics.gauge(
+      name: 'unpub_inflight_upstream_metadata',
+      help: 'Concurrent upstream metadata fetches currently in flight.',
+    );
+    _inflightTarballGauge = metrics.gauge(
+      name: 'unpub_inflight_upstream_tarballs',
+      help: 'Concurrent upstream tarball fetches currently in flight.',
+    );
+  }
 
   static shelf.Response _okWithJson(Map<String, dynamic> data) =>
       shelf.Response.ok(
@@ -146,7 +216,17 @@ class App {
     var handler = const shelf.Pipeline()
         .addMiddleware(corsHeaders())
         .addMiddleware(shelf.logRequests())
+        .addMiddleware(_metricsMiddleware())
         .addHandler((req) async {
+      if (req.url.path == 'metrics') {
+        return shelf.Response.ok(
+          metrics.render(),
+          headers: {
+            HttpHeaders.contentTypeHeader:
+                'text/plain; version=0.0.4; charset=utf-8',
+          },
+        );
+      }
       // Return 404 by default
       // https://github.com/google/dart-neats/issues/1
       var res = await router.call(req);
@@ -154,6 +234,62 @@ class App {
     });
     var server = await shelf_io.serve(handler, host, port);
     return server;
+  }
+
+  /// Records `unpub_http_requests_total` + `unpub_http_request_duration_seconds`
+  /// per route. The route label is a low-cardinality template
+  /// (`/api/packages/<name>` rather than `/api/packages/path`), so that the
+  /// metric series count stays bounded as the package catalogue grows.
+  shelf.Middleware _metricsMiddleware() {
+    return (inner) {
+      return (req) async {
+        // Skip self-instrumentation to avoid double counting `/metrics` hits.
+        if (req.url.path == 'metrics') return inner(req);
+        final route = _routeTemplate(req.url.path);
+        final method = req.method;
+        final sw = Stopwatch()..start();
+        shelf.Response res;
+        try {
+          res = await inner(req);
+        } finally {
+          sw.stop();
+          _httpRequestDuration.observe(
+              sw.elapsedMicroseconds / 1e6, [route, method]);
+        }
+        _httpRequestsTotal.inc([route, method, res.statusCode.toString()]);
+        return res;
+      };
+    };
+  }
+
+  /// Map concrete request paths to a low-cardinality label.
+  String _routeTemplate(String path) {
+    final p = path.startsWith('/') ? path : '/$path';
+    if (p.startsWith('/api/packages/versions/new')) {
+      return '/api/packages/versions/new';
+    }
+    if (p.startsWith('/api/packages/versions/newUpload')) {
+      return '/api/packages/versions/newUpload';
+    }
+    if (p == '/api/packages/versions/newUploadFinish') return p;
+    if (p.startsWith('/api/packages/')) {
+      final parts = p.split('/');
+      // /api/packages/<name>/versions/<version>
+      if (parts.length >= 6 && parts[4] == 'versions') {
+        return '/api/packages/<name>/versions/<version>';
+      }
+      // /api/packages/<name>/uploaders[/<email>]
+      if (parts.length >= 5 && parts[4] == 'uploaders') {
+        return '/api/packages/<name>/uploaders';
+      }
+      return '/api/packages/<name>';
+    }
+    if (p.startsWith('/packages/') && p.endsWith('.tar.gz')) {
+      return '/packages/<name>/versions/<version>.tar.gz';
+    }
+    if (p.startsWith('/badge/')) return '/badge/<kind>/<name>';
+    if (p == '' || p == '/') return '/';
+    return p; // static assets / unknown — bounded by file count
   }
 
   Map<String, dynamic> _versionToJson(UnpubVersion item, shelf.Request req) {
@@ -186,6 +322,8 @@ class App {
         return shelf.Response.found(
             Uri.parse(upstream).resolve('/api/packages/$name').toString());
       }
+    } else {
+      _upstreamCacheHits.inc(['metadata']);
     }
 
     package.versions.sort((a, b) {
@@ -260,7 +398,9 @@ class App {
     if (cacheUpstream) {
       try {
         final present = await packageStore.exists(name, version);
-        if (!present) {
+        if (present) {
+          _upstreamCacheHits.inc(['tarball']);
+        } else {
           await _fetchAndCacheUpstreamTarball(name, version);
         }
       } catch (_) {
@@ -271,6 +411,7 @@ class App {
     if (isPubClient(req)) {
       metaStore.increaseDownloads(name, version);
     }
+    _downloadsTotal.inc([name]);
 
     if (packageStore.supportsDownloadUrl) {
       return shelf.Response.found(
@@ -295,14 +436,24 @@ class App {
   }) async {
     if (!force) {
       final existing = _inflightMeta[name];
-      if (existing != null) return existing;
+      if (existing != null) {
+        _upstreamDedupHits.inc(['metadata']);
+        return existing;
+      }
     }
+    _upstreamCacheMisses.inc(['metadata']);
+    final sw = Stopwatch()..start();
     final future = _doFetchAndCacheUpstreamPackage(name);
     _inflightMeta[name] = future;
+    _inflightMetaGauge.inc();
     try {
       return await future;
     } finally {
       _inflightMeta.remove(name);
+      _inflightMetaGauge.dec();
+      sw.stop();
+      _upstreamFetchDuration.observe(
+          sw.elapsedMicroseconds / 1e6, ['metadata']);
     }
   }
 
@@ -373,13 +524,23 @@ class App {
       String name, String version) async {
     final key = '$name@$version';
     final existing = _inflightTarballs[key];
-    if (existing != null) return existing;
+    if (existing != null) {
+      _upstreamDedupHits.inc(['tarball']);
+      return existing;
+    }
+    _upstreamCacheMisses.inc(['tarball']);
+    final sw = Stopwatch()..start();
     final future = _doFetchAndCacheUpstreamTarball(name, version);
     _inflightTarballs[key] = future;
+    _inflightTarballGauge.inc();
     try {
       return await future;
     } finally {
       _inflightTarballs.remove(key);
+      _inflightTarballGauge.dec();
+      sw.stop();
+      _upstreamFetchDuration.observe(
+          sw.elapsedMicroseconds / 1e6, ['tarball']);
     }
   }
 
@@ -489,6 +650,7 @@ class App {
 
       // Upload package tarball to storage
       await packageStore.upload(name, version, tarballBytes);
+      _uploadsTotal.inc([name]);
 
       String? readme;
       String? changelog;
