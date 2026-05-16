@@ -1,0 +1,130 @@
+image:
+  repository: ghcr.io/rpsadarangani/unpub
+  tag: ""
+  pullPolicy: IfNotPresent
+
+imagePullSecrets: []
+
+# Pick one of: "dynamo" (S3 tarballs + DynamoDB metadata) or "s3only"
+# (S3 tarballs + Iceberg-style metadata in same bucket).
+mode: dynamo
+
+replicaCount: 2
+
+resources:
+  requests:
+    cpu: 500m
+    memory: 1Gi
+  limits:
+    memory: 2Gi
+
+# Athens-style upstream caching. When true, cache misses pull from upstream
+# (pub.dev by default) and persist into S3 / metadata store.
+cacheUpstream: true
+upstream: "https://pub.dev"
+
+aws:
+  region: ap-south-1
+  bucket: "unpub-packages"
+  ddbTable: "unpub-packages"
+  ddbStatsTable: "unpub-stats"
+  # Optional overrides for non-AWS S3 / DynamoDB endpoints (local dev only).
+  s3Endpoint: ""
+  ddbEndpoint: ""
+
+# Credential source. Use IRSA in production via serviceAccount.annotations
+# (AWS_ROLE_ARN is injected automatically by the EKS pod-identity webhook).
+# Static keys belong in ExternalSecret -> envFrom.
+serviceAccount:
+  create: true
+  name: ""
+  annotations: {}
+
+externalSecret:
+  enabled: false
+  # apiVersion: external-secrets.io/v1 (prod) or v1beta1 (non-prod)
+  apiVersion: external-secrets.io/v1beta1
+  secretStoreRef:
+    name: aws-secretsmanager
+    kind: ClusterSecretStore
+  refreshInterval: 1h
+  # Each entry maps a secretKey from the remote store to a container env var.
+  # Use this only when not running under IRSA.
+  data: []
+  # - envVar: AWS_ACCESS_KEY_ID
+  #   remoteRef:
+  #     key: /non-prod-dso/infra/unpub-aws-creds
+  #     property: access_key_id
+
+env: {}
+# UNPUB_OVERRIDE_UPLOADER: ""
+
+service:
+  type: ClusterIP
+  port: 80
+  targetPort: 4000
+
+ingress:
+  enabled: false
+  className: nginx
+  annotations: {}
+  host: unpub.dso.example.com
+  tls: []
+
+# Istio VirtualService — preferred over plain Ingress on EKS-with-Istio setups.
+istio:
+  enabled: false
+  gateway: istio-system/internal-gateway
+  host: unpub.dso.example.com
+
+hpa:
+  enabled: true
+  apiVersionOverride: ""
+  minReplicas: 2
+  maxReplicas: 5
+  targetCPUUtilizationPercentage: 75
+  targetMemoryUtilizationPercentage: 75
+
+podDisruptionBudget:
+  enabled: true
+  minAvailable: 1
+
+podAnnotations:
+  prometheus.io/scrape: "true"
+  prometheus.io/path: "/metrics"
+  prometheus.io/port: "4000"
+
+# Prometheus Operator ServiceMonitor (preferred over the pod annotations
+# above when the cluster runs kube-prometheus-stack).
+serviceMonitor:
+  enabled: false
+  interval: 30s
+  scrapeTimeout: 10s
+  additionalLabels: {}
+
+podLabels: {}
+
+nodeSelector: {}
+
+tolerations: []
+
+affinity:
+  nodeAffinity:
+    preferredDuringSchedulingIgnoredDuringExecution:
+      - weight: 10
+        preference:
+          matchExpressions:
+            - key: karpenter.sh/capacity-type
+              operator: In
+              values: ["spot"]
+
+securityContext:
+  fsGroup: 65532
+
+containerSecurityContext:
+  readOnlyRootFilesystem: true
+  runAsNonRoot: true
+  runAsUser: 65532
+  allowPrivilegeEscalation: false
+  capabilities:
+    drop: ["ALL"]
