@@ -55,6 +55,18 @@ class S3Client {
         host: '$bucket.${base.host}', path: '/', queryParameters: query);
   }
 
+  /// HEAD request — same shape as [getObject] minus the body. Useful for
+  /// existence checks (e.g. [PackageStore.exists]).
+  Future<bool> headObject(String key) async {
+    final req = http.Request('HEAD', _objectUri(key));
+    final res = await _send(req);
+    if (res.statusCode == 404) return false;
+    if (res.statusCode != 200) {
+      throw S3Exception('HeadObject', key, res.statusCode, res.body);
+    }
+    return true;
+  }
+
   Future<S3ObjectResponse> getObject(String key) async {
     final req = http.Request('GET', _objectUri(key));
     final res = await _send(req);

@@ -21,14 +21,9 @@ main(List<String> args) async {
         // Pass in an alternative if needed.
         getObjectPath: (String name, String version) => '$name/$name-$version.tar.gz',
 
-        // You can provide credentials manually but...
-        // Don't be bad at security populate env vars instead...
-        // AWS_ACCESS_KEY_ID=xxxxxxxxxxxxxxxxxxxxxxx
-        // AWS_SECRET_ACCESS_KEY=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
-        credentials: unpub_aws.AwsCredentials(
-            awsAccessKeyId: '',
-            awsSecretAccessKey: '',
-            awsSessionToken: '')),
+        // Credentials resolved via the IRSA-aware AwsCredentialChain. For
+        // static keys (dev only) pass AwsCredentialChain(override: ...).
+        credentials: unpub_aws.AwsCredentialChain()),
   );
 
   final server = await app.serve('0.0.0.0', 4000);
