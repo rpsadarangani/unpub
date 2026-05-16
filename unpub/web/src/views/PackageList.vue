@@ -121,10 +121,45 @@ onMounted(() => {
   </div>
 
   <template v-else>
-    <div v-if="packages.length === 0" class="empty">
-      No packages yet — publish with
-      <code>dart pub publish --server={{ origin }}</code>
-      or wait for upstream cache fill.
+    <details v-if="!props.query" class="how-to" open>
+      <summary><strong>How to use this registry</strong></summary>
+      <div class="how-grid">
+        <div>
+          <div class="label">Consume packages</div>
+<pre>export PUB_HOSTED_URL={{ origin }}
+dart pub get      # or:  flutter pub get</pre>
+          <div class="hint">
+            Or in <code>pubspec.yaml</code>:
+          </div>
+<pre>dependencies:
+  my_pkg:
+    hosted: {{ origin }}
+    version: ^1.0.0</pre>
+        </div>
+        <div>
+          <div class="label">Publish your own package</div>
+<pre># add to your pubspec.yaml:
+publish_to: {{ origin }}
+
+# then:
+dart pub publish</pre>
+          <div class="hint">
+            One-shot without editing <code>pubspec.yaml</code>:
+          </div>
+<pre>dart pub publish --server={{ origin }}</pre>
+        </div>
+      </div>
+      <p class="hint" style="margin-top:8px">
+        Every cache miss against <code>pub.dev</code> is mirrored into S3 +
+        DynamoDB. Subsequent fetches stay inside your VPC. Search above to
+        find a package, or browse the list below.
+      </p>
+    </details>
+
+    <div v-if="packages.length === 0 && !props.query" class="empty">
+      No packages yet — publish one with the snippet above or wait for the
+      first upstream cache fill (any <code>dart pub get</code> that resolves
+      a <code>pub.dev</code> dependency will populate this list).
     </div>
 
     <a
@@ -339,5 +374,31 @@ const origin = window.location.origin;
   color: #ff7e7e;
   font-size: 13px;
   margin-top: 8px;
+}
+.how-to {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 14px 18px;
+  margin-bottom: 20px;
+}
+.how-to summary {
+  cursor: pointer;
+  color: var(--text);
+  list-style: revert;
+}
+.how-to pre {
+  margin: 6px 0;
+}
+.how-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 18px;
+  margin-top: 12px;
+}
+@media (max-width: 720px) {
+  .how-grid {
+    grid-template-columns: 1fr;
+  }
 }
 </style>

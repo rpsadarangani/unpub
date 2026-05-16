@@ -132,15 +132,16 @@ class App {
       help: 'Time spent fetching a package from the upstream registry.',
       labelNames: ['kind'],
     );
+    // Per-package labels would explode cardinality once the catalogue grows.
+    // Total counters here; per-package telemetry lives in the `unpub-stats`
+    // DynamoDB table (see DynamoMetaStore.queryDailyDownloads).
     _uploadsTotal = metrics.counter(
       name: 'unpub_uploads_total',
       help: 'Successful publish requests (excluding upstream mirrors).',
-      labelNames: ['package'],
     );
     _downloadsTotal = metrics.counter(
       name: 'unpub_downloads_total',
       help: 'Tarball downloads served from the local store.',
-      labelNames: ['package'],
     );
     _inflightMetaGauge = metrics.gauge(
       name: 'unpub_inflight_upstream_metadata',
@@ -419,7 +420,7 @@ class App {
     if (isPubClient(req)) {
       metaStore.increaseDownloads(name, version);
     }
-    _downloadsTotal.inc([name]);
+    _downloadsTotal.inc();
 
     if (packageStore.supportsDownloadUrl) {
       return shelf.Response.found(
@@ -658,7 +659,7 @@ class App {
 
       // Upload package tarball to storage
       await packageStore.upload(name, version, tarballBytes);
-      _uploadsTotal.inc([name]);
+      _uploadsTotal.inc();
 
       String? readme;
       String? changelog;
