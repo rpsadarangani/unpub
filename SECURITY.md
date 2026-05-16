@@ -8,9 +8,11 @@ The project follows the latest `v0.x` release on `master`. Older tags are not pa
 
 **Please do not open a public GitHub issue for security reports.**
 
-Email the maintainer at: **rahul.sadarangani at slicebank.com**
+Use GitHub's private vulnerability reporting:
 
-If you don't get an acknowledgement within 72 hours, you can also send a follow-up DM via GitHub (`@rpsadarangani`).
+- https://github.com/rpsadarangani/unpub/security/advisories/new
+
+If GitHub private reporting is unavailable for some reason, open an issue marked `security` and request that the maintainer move the discussion to a private advisory — but do not include exploitation details in the public issue body.
 
 Include in your report:
 

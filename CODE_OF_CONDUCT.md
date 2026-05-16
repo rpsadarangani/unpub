@@ -22,7 +22,7 @@ Examples of unacceptable behavior:
 
 ## Enforcement
 
-Instances of abusive, harassing, or otherwise unacceptable behavior may be reported to the maintainer at **rahul.sadarangani at slicebank.com**. All complaints will be reviewed and investigated promptly and fairly.
+Instances of abusive, harassing, or otherwise unacceptable behavior should be reported by opening a [GitHub private vulnerability advisory](https://github.com/rpsadarangani/unpub/security/advisories/new) (which lets you contact the maintainer privately) or by [opening an issue](https://github.com/rpsadarangani/unpub/issues/new/choose) and tagging the maintainer if the report can be public. All complaints will be reviewed and investigated promptly and fairly.
 
 ## Attribution
 

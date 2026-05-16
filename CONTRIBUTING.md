@@ -43,6 +43,16 @@ UNPUB_CACHE_UPSTREAM=true \
 
 Then publish or consume a package against `http://localhost:4000`.
 
+## Reporting issues
+
+All discussion happens on GitHub:
+
+- **Bugs / feature requests** — [open an issue](https://github.com/rpsadarangani/unpub/issues/new/choose).
+- **Questions / "how do I…?"** — [GitHub Discussions](https://github.com/rpsadarangani/unpub/discussions).
+- **Security** — [private vulnerability report](https://github.com/rpsadarangani/unpub/security/advisories/new) (see [SECURITY.md](./SECURITY.md)).
+
+No email channel. Please don't DM the maintainer privately about issues that can be tracked in the open.
+
 ## Sending a PR
 
 1. Open an issue first if the change is large or design-impacting.
