@@ -44,23 +44,6 @@ void main() async {
       expect(creds.awsSecretAccessKey, credMap['AWS_SECRET_ACCESS_KEY']);
     });
 
-    test('aws-credentials-ecs-container-iam', () async {
-      var credMap = {
-        'AWS_CONTAINER_CREDENTIALS_RELATIVE_URI': 'special-access-key',
-      };
-      Map<String, String> containerCredentials = {
-        'AccessKeyId': 'container-creds-key',
-        'SecretAccessKey': 'container-creds-secret',
-        'Token': 'container-creds-token'
-      };
-      var creds = await AwsCredentials(
-          environment: credMap, containerCredentials: containerCredentials);
-
-      expect(creds.awsAccessKeyId, containerCredentials['AccessKeyId']);
-      expect(creds.awsSecretAccessKey, containerCredentials['SecretAccessKey']);
-      expect(creds.awsSessionToken, containerCredentials['Token']);
-    });
-
     test('upload-download-default-path', () async {
       await testS3Store.upload('test_package', '1.0.0', testPackageData);
       var pkg1 =

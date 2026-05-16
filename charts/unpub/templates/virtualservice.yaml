@@ -1,0 +1,19 @@
+{{- if .Values.istio.enabled -}}
+apiVersion: networking.istio.io/v1beta1
+kind: VirtualService
+metadata:
+  name: {{ include "unpub.fullname" . }}
+  labels:
+    {{- include "unpub.labels" . | nindent 4 }}
+spec:
+  hosts:
+    - {{ .Values.istio.host }}
+  gateways:
+    - {{ .Values.istio.gateway }}
+  http:
+    - route:
+        - destination:
+            host: {{ include "unpub.fullname" . }}
+            port:
+              number: {{ .Values.service.port }}
+{{- end }}

@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'package:collection/collection.dart' show IterableExtension;
@@ -15,6 +16,7 @@ import 'package:archive/archive.dart';
 import 'package:unpub/src/models.dart';
 import 'package:unpub/unpub_api/lib/models.dart';
 import 'package:unpub/src/meta_store.dart';
+import 'package:unpub/src/metrics.dart';
 import 'package:unpub/src/package_store.dart';
 import 'utils.dart';
 import 'static/index.html.dart' as index_html;
@@ -47,6 +49,41 @@ class App {
   final Future<void> Function(
       Map<String, dynamic> pubspec, String uploaderEmail)? uploadValidator;
 
+  /// When `true`, on a cache miss the server fetches the package metadata
+  /// (and tarballs) from [upstream], stores them locally, and serves the
+  /// cached copy on subsequent requests — Athens-style pull-through caching.
+  /// When `false`, cache misses are served by HTTP `302` to the upstream
+  /// (original behaviour).
+  final bool cacheUpstream;
+
+  /// Email recorded as the "uploader" on packages mirrored from upstream.
+  /// Defaults to `upstream@<host>`.
+  final String? upstreamUploaderEmail;
+
+  /// HTTP client used to fetch from [upstream]. Override in tests.
+  final http.Client _upstreamClient;
+
+  /// In-flight upstream metadata fetches keyed by package name — dedupes
+  /// thundering herds so N concurrent first-fetches collapse to 1 upstream call.
+  final Map<String, Future<UnpubPackage?>> _inflightMeta = {};
+
+  /// In-flight upstream tarball fetches keyed by `<name>@<version>`.
+  final Map<String, Future<List<int>>> _inflightTarballs = {};
+
+  /// Prometheus metrics registry, exposed at `GET /metrics`.
+  late final Metrics metrics;
+
+  late final Counter _httpRequestsTotal;
+  late final Histogram _httpRequestDuration;
+  late final Counter _upstreamCacheHits;
+  late final Counter _upstreamCacheMisses;
+  late final Counter _upstreamDedupHits;
+  late final Histogram _upstreamFetchDuration;
+  late final Counter _uploadsTotal;
+  late final Counter _downloadsTotal;
+  late final Gauge _inflightMetaGauge;
+  late final Gauge _inflightTarballGauge;
+
   App({
     required this.metaStore,
     required this.packageStore,
@@ -55,7 +92,65 @@ class App {
     this.overrideUploaderEmail,
     this.uploadValidator,
     this.proxy_origin,
-  });
+    this.cacheUpstream = false,
+    this.upstreamUploaderEmail,
+    http.Client? upstreamClient,
+    Metrics? metrics,
+  }) : _upstreamClient = upstreamClient ?? http.Client() {
+    this.metrics = metrics ?? Metrics();
+    _registerMetrics();
+  }
+
+  void _registerMetrics() {
+    _httpRequestsTotal = metrics.counter(
+      name: 'unpub_http_requests_total',
+      help: 'Total HTTP requests served by unpub.',
+      labelNames: ['route', 'method', 'status'],
+    );
+    _httpRequestDuration = metrics.histogram(
+      name: 'unpub_http_request_duration_seconds',
+      help: 'HTTP request handler latency in seconds.',
+      labelNames: ['route', 'method'],
+    );
+    _upstreamCacheHits = metrics.counter(
+      name: 'unpub_upstream_cache_hits_total',
+      help: 'Cache-on-miss requests where the package was already in the local store.',
+      labelNames: ['kind'],
+    );
+    _upstreamCacheMisses = metrics.counter(
+      name: 'unpub_upstream_cache_misses_total',
+      help: 'Cache-on-miss requests where unpub had to fetch from upstream.',
+      labelNames: ['kind'],
+    );
+    _upstreamDedupHits = metrics.counter(
+      name: 'unpub_upstream_dedup_hits_total',
+      help: 'Concurrent fetches that were collapsed onto an in-flight upstream call.',
+      labelNames: ['kind'],
+    );
+    _upstreamFetchDuration = metrics.histogram(
+      name: 'unpub_upstream_fetch_duration_seconds',
+      help: 'Time spent fetching a package from the upstream registry.',
+      labelNames: ['kind'],
+    );
+    _uploadsTotal = metrics.counter(
+      name: 'unpub_uploads_total',
+      help: 'Successful publish requests (excluding upstream mirrors).',
+      labelNames: ['package'],
+    );
+    _downloadsTotal = metrics.counter(
+      name: 'unpub_downloads_total',
+      help: 'Tarball downloads served from the local store.',
+      labelNames: ['package'],
+    );
+    _inflightMetaGauge = metrics.gauge(
+      name: 'unpub_inflight_upstream_metadata',
+      help: 'Concurrent upstream metadata fetches currently in flight.',
+    );
+    _inflightTarballGauge = metrics.gauge(
+      name: 'unpub_inflight_upstream_tarballs',
+      help: 'Concurrent upstream tarball fetches currently in flight.',
+    );
+  }
 
   static shelf.Response _okWithJson(Map<String, dynamic> data) =>
       shelf.Response.ok(
@@ -121,7 +216,17 @@ class App {
     var handler = const shelf.Pipeline()
         .addMiddleware(corsHeaders())
         .addMiddleware(shelf.logRequests())
+        .addMiddleware(_metricsMiddleware())
         .addHandler((req) async {
+      if (req.url.path == 'metrics') {
+        return shelf.Response.ok(
+          metrics.render(),
+          headers: {
+            HttpHeaders.contentTypeHeader:
+                'text/plain; version=0.0.4; charset=utf-8',
+          },
+        );
+      }
       // Return 404 by default
       // https://github.com/google/dart-neats/issues/1
       var res = await router.call(req);
@@ -129,6 +234,62 @@ class App {
     });
     var server = await shelf_io.serve(handler, host, port);
     return server;
+  }
+
+  /// Records `unpub_http_requests_total` + `unpub_http_request_duration_seconds`
+  /// per route. The route label is a low-cardinality template
+  /// (`/api/packages/<name>` rather than `/api/packages/path`), so that the
+  /// metric series count stays bounded as the package catalogue grows.
+  shelf.Middleware _metricsMiddleware() {
+    return (inner) {
+      return (req) async {
+        // Skip self-instrumentation to avoid double counting `/metrics` hits.
+        if (req.url.path == 'metrics') return inner(req);
+        final route = _routeTemplate(req.url.path);
+        final method = req.method;
+        final sw = Stopwatch()..start();
+        shelf.Response res;
+        try {
+          res = await inner(req);
+        } finally {
+          sw.stop();
+          _httpRequestDuration.observe(
+              sw.elapsedMicroseconds / 1e6, [route, method]);
+        }
+        _httpRequestsTotal.inc([route, method, res.statusCode.toString()]);
+        return res;
+      };
+    };
+  }
+
+  /// Map concrete request paths to a low-cardinality label.
+  String _routeTemplate(String path) {
+    final p = path.startsWith('/') ? path : '/$path';
+    if (p.startsWith('/api/packages/versions/new')) {
+      return '/api/packages/versions/new';
+    }
+    if (p.startsWith('/api/packages/versions/newUpload')) {
+      return '/api/packages/versions/newUpload';
+    }
+    if (p == '/api/packages/versions/newUploadFinish') return p;
+    if (p.startsWith('/api/packages/')) {
+      final parts = p.split('/');
+      // /api/packages/<name>/versions/<version>
+      if (parts.length >= 6 && parts[4] == 'versions') {
+        return '/api/packages/<name>/versions/<version>';
+      }
+      // /api/packages/<name>/uploaders[/<email>]
+      if (parts.length >= 5 && parts[4] == 'uploaders') {
+        return '/api/packages/<name>/uploaders';
+      }
+      return '/api/packages/<name>';
+    }
+    if (p.startsWith('/packages/') && p.endsWith('.tar.gz')) {
+      return '/packages/<name>/versions/<version>.tar.gz';
+    }
+    if (p.startsWith('/badge/')) return '/badge/<kind>/<name>';
+    if (p == '' || p == '/') return '/';
+    return p; // static assets / unknown — bounded by file count
   }
 
   Map<String, dynamic> _versionToJson(UnpubVersion item, shelf.Request req) {
@@ -154,8 +315,15 @@ class App {
     var package = await metaStore.queryPackage(name);
 
     if (package == null) {
-      return shelf.Response.found(
-          Uri.parse(upstream).resolve('/api/packages/$name').toString());
+      if (cacheUpstream) {
+        package = await _fetchAndCacheUpstreamPackage(name);
+      }
+      if (package == null) {
+        return shelf.Response.found(
+            Uri.parse(upstream).resolve('/api/packages/$name').toString());
+      }
+    } else {
+      _upstreamCacheHits.inc(['metadata']);
     }
 
     package.versions.sort((a, b) {
@@ -185,6 +353,9 @@ class App {
     }
 
     var package = await metaStore.queryPackage(name);
+    if (package == null && cacheUpstream) {
+      package = await _fetchAndCacheUpstreamPackage(name);
+    }
     if (package == null) {
       return shelf.Response.found(Uri.parse(upstream)
           .resolve('/api/packages/$name/versions/$version')
@@ -204,15 +375,43 @@ class App {
   Future<shelf.Response> download(
       shelf.Request req, String name, String version) async {
     var package = await metaStore.queryPackage(name);
+
+    // Cache-on-miss: pull metadata from upstream so subsequent fetches see it.
+    if (package == null && cacheUpstream) {
+      package = await _fetchAndCacheUpstreamPackage(name);
+    }
     if (package == null) {
       return shelf.Response.found(Uri.parse(upstream)
           .resolve('/packages/$name/versions/$version.tar.gz')
           .toString());
     }
 
+    final hasVersion = package.versions.any((v) => v.version == version);
+    if (!hasVersion && cacheUpstream) {
+      // Metadata is stale — refresh from upstream so we know the new version.
+      package = await _fetchAndCacheUpstreamPackage(name, force: true);
+    }
+
+    // Pull from upstream when the tarball isn't in our store yet — covers
+    // both first-touch and the case where metadata was cached previously
+    // but the tarball itself is still missing.
+    if (cacheUpstream) {
+      try {
+        final present = await packageStore.exists(name, version);
+        if (present) {
+          _upstreamCacheHits.inc(['tarball']);
+        } else {
+          await _fetchAndCacheUpstreamTarball(name, version);
+        }
+      } catch (_) {
+        // Falls back to packageStore.download which will surface the real error.
+      }
+    }
+
     if (isPubClient(req)) {
       metaStore.increaseDownloads(name, version);
     }
+    _downloadsTotal.inc([name]);
 
     if (packageStore.supportsDownloadUrl) {
       return shelf.Response.found(
@@ -223,6 +422,138 @@ class App {
         headers: {HttpHeaders.contentTypeHeader: ContentType.binary.mimeType},
       );
     }
+  }
+
+  /// Fetch a package's metadata from [upstream] and persist each version
+  /// through [metaStore]. Returns the freshly cached `UnpubPackage`, or
+  /// `null` when upstream has nothing.
+  ///
+  /// Dedupes concurrent calls for the same package name through
+  /// [_inflightMeta] so cold-cache spikes only hit upstream once.
+  Future<UnpubPackage?> _fetchAndCacheUpstreamPackage(
+    String name, {
+    bool force = false,
+  }) async {
+    if (!force) {
+      final existing = _inflightMeta[name];
+      if (existing != null) {
+        _upstreamDedupHits.inc(['metadata']);
+        return existing;
+      }
+    }
+    _upstreamCacheMisses.inc(['metadata']);
+    final sw = Stopwatch()..start();
+    final future = _doFetchAndCacheUpstreamPackage(name);
+    _inflightMeta[name] = future;
+    _inflightMetaGauge.inc();
+    try {
+      return await future;
+    } finally {
+      _inflightMeta.remove(name);
+      _inflightMetaGauge.dec();
+      sw.stop();
+      _upstreamFetchDuration.observe(
+          sw.elapsedMicroseconds / 1e6, ['metadata']);
+    }
+  }
+
+  Future<UnpubPackage?> _doFetchAndCacheUpstreamPackage(String name) async {
+    final url = Uri.parse(upstream).resolve('/api/packages/$name');
+    final res = await _upstreamClient.get(url);
+    if (res.statusCode == 404) return null;
+    if (res.statusCode ~/ 100 != 2) {
+      throw 'upstream $url returned ${res.statusCode}';
+    }
+    final body = json.decode(res.body) as Map<String, dynamic>;
+    final versionsRaw = (body['versions'] as List? ?? const [])
+        .cast<Map<String, dynamic>>();
+    final uploaderEmail = upstreamUploaderEmail ??
+        'upstream@${Uri.parse(upstream).host}';
+
+    // Build the in-memory UnpubPackage from the upstream payload so the
+    // caller can serve a response immediately without waiting for every
+    // version to land in the meta store. Persistence below is fire-and-forget.
+    final versions = versionsRaw
+        .map((v) => UnpubVersion(
+              v['version'] as String,
+              (v['pubspec'] as Map<String, dynamic>?) ??
+                  const <String, dynamic>{},
+              v['pubspec_yaml'] as String?,
+              uploaderEmail,
+              null,
+              null,
+              DateTime.now().toUtc(),
+            ))
+        .toList();
+    final now = DateTime.now().toUtc();
+    final synthetic = UnpubPackage(
+      name,
+      versions,
+      false,
+      [uploaderEmail],
+      now,
+      now,
+      0,
+    );
+
+    // Persist in the background — schedule on the next microtask so the
+    // caller can return before we kick off N concurrent meta-store writes.
+    Future.microtask(() => _persistUpstreamVersions(name, versions));
+    return synthetic;
+  }
+
+  Future<void> _persistUpstreamVersions(
+      String name, List<UnpubVersion> versions) async {
+    const concurrency = 8;
+    var i = 0;
+    while (i < versions.length) {
+      final chunk = versions.skip(i).take(concurrency).toList();
+      await Future.wait(chunk.map((v) async {
+        try {
+          await metaStore.addVersion(name, v);
+        } catch (_) {/* race / duplicate — ignore */}
+      }));
+      i += concurrency;
+    }
+  }
+
+  /// Pull a tarball from upstream and store it via [packageStore], unless
+  /// it already exists locally. Concurrent calls for the same version are
+  /// deduped through [_inflightTarballs].
+  Future<List<int>> _fetchAndCacheUpstreamTarball(
+      String name, String version) async {
+    final key = '$name@$version';
+    final existing = _inflightTarballs[key];
+    if (existing != null) {
+      _upstreamDedupHits.inc(['tarball']);
+      return existing;
+    }
+    _upstreamCacheMisses.inc(['tarball']);
+    final sw = Stopwatch()..start();
+    final future = _doFetchAndCacheUpstreamTarball(name, version);
+    _inflightTarballs[key] = future;
+    _inflightTarballGauge.inc();
+    try {
+      return await future;
+    } finally {
+      _inflightTarballs.remove(key);
+      _inflightTarballGauge.dec();
+      sw.stop();
+      _upstreamFetchDuration.observe(
+          sw.elapsedMicroseconds / 1e6, ['tarball']);
+    }
+  }
+
+  Future<List<int>> _doFetchAndCacheUpstreamTarball(
+      String name, String version) async {
+    final url = Uri.parse(upstream)
+        .resolve('/api/archives/$name-$version.tar.gz');
+    final res = await _upstreamClient.get(url);
+    if (res.statusCode ~/ 100 != 2) {
+      throw 'upstream tarball $url returned ${res.statusCode}';
+    }
+    await packageStore.upload(name, version, res.bodyBytes);
+    return res.bodyBytes;
   }
 
   @Route.get('/api/packages/versions/new')
@@ -319,6 +650,7 @@ class App {
 
       // Upload package tarball to storage
       await packageStore.upload(name, version, tarballBytes);
+      _uploadsTotal.inc([name]);
 
       String? readme;
       String? changelog;
