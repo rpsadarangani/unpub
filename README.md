@@ -64,6 +64,8 @@ The first time anyone fetches a given `<pkg>@<version>` the proxy pulls it from 
 
 ## Quickstart
 
+> Want the full production runbook (S3 + DynamoDB + IRSA + Helm + DNS + smoke tests)? See [docs/deployment.md](./docs/deployment.md).
+
 ### Run with Docker (local stack)
 
 ```sh
