@@ -1,5 +1,7 @@
+import 'dart:async';
 import 'dart:io';
 
+import 'package:minio/minio.dart';
 import 'package:unpub/unpub.dart' as unpub;
 import 'package:unpub_aws/unpub_aws.dart' as aws;
 
@@ -44,13 +46,38 @@ Future<void> main(List<String> args) async {
       );
   }
 
+  // S3Store uses the minio client, which captures static credentials at
+  // construction time. Resolve once via the chain (IRSA-aware) so the binary
+  // can boot under IRSA. A 50-minute timer refreshes the underlying minio
+  // client before the STS web-identity token's 1h lifetime expires.
+  final resolvedCreds = await credentials.resolve();
+  final s3Store = aws.S3Store(
+    bucket,
+    region: region,
+    endpoint: env['AWS_S3_ENDPOINT'],
+    credentials: resolvedCreds,
+  );
+  Timer.periodic(const Duration(minutes: 50), (_) async {
+    try {
+      final fresh = await credentials.resolve();
+      s3Store.credentials = fresh;
+      s3Store.minio = Minio(
+        endPoint: s3Store.minio!.endPoint,
+        port: s3Store.minio!.port,
+        useSSL: s3Store.minio!.useSSL,
+        region: s3Store.minio!.region,
+        accessKey: fresh.awsAccessKeyId ?? '',
+        secretKey: fresh.awsSecretAccessKey ?? '',
+        sessionToken: fresh.awsSessionToken,
+      );
+    } catch (e) {
+      stderr.writeln('credential refresh failed: $e');
+    }
+  });
+
   final app = unpub.App(
     metaStore: meta,
-    packageStore: aws.S3Store(
-      bucket,
-      region: region,
-      endpoint: env['AWS_S3_ENDPOINT'],
-    ),
+    packageStore: s3Store,
     overrideUploaderEmail: env['UNPUB_OVERRIDE_UPLOADER'],
     cacheUpstream: env['UNPUB_CACHE_UPSTREAM'] == 'true',
     upstream: env['UNPUB_UPSTREAM'] ?? 'https://pub.dev',
