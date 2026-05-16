@@ -29,12 +29,14 @@ import 'dynamo_client.dart';
 class DynamoMetaStore extends MetaStore {
   final DynamoClient client;
   final String table;
+  final String? statsTable;
   final String? listIndexName;
   final String? downloadIndexName;
 
   DynamoMetaStore({
     required this.client,
     required this.table,
+    this.statsTable = 'unpub-stats',
     this.listIndexName = 'gsi_updated',
     this.downloadIndexName = 'gsi_download',
   });
@@ -60,38 +62,49 @@ class DynamoMetaStore extends MetaStore {
     final versionJson = version.toJson();
     final createdAtIso = version.createdAt.toUtc().toIso8601String();
 
-    final updateExpression = StringBuffer(
-        'SET versions = list_append(if_not_exists(versions, :empty), :v), '
-        'updatedAt = :ts, '
-        'latestVersion = :lv, '
-        'createdAt = if_not_exists(createdAt, :ts), '
-        'private = if_not_exists(private, :true), '
-        '#all = :all');
-    final expressionAttributeNames = <String, String>{'#all': '_all'};
-    final expressionAttributeValues = <String, dynamic>{
+    // Alias every attribute we touch — many are DynamoDB reserved words.
+    final exprNames = <String, String>{
+      '#versions': 'versions',
+      '#updatedAt': 'updatedAt',
+      '#latestVersion': 'latestVersion',
+      '#createdAt': 'createdAt',
+      '#private': 'private',
+      '#all': '_all',
+      '#download': 'download',
+    };
+
+    final exprValues = <String, dynamic>{
       ':v': Ddb.list([Ddb.map(_normalizeForDdb(versionJson))]),
       ':empty': Ddb.list(const <Map<String, dynamic>>[]),
       ':ts': Ddb.s(createdAtIso),
       ':lv': Ddb.s(version.version),
       ':true': Ddb.b(true),
       ':all': Ddb.s('1'),
+      ':zero': Ddb.n(0),
     };
 
+    final setExpr = '#versions = list_append(if_not_exists(#versions, :empty), :v), '
+        '#updatedAt = :ts, '
+        '#latestVersion = :lv, '
+        '#createdAt = if_not_exists(#createdAt, :ts), '
+        '#private = if_not_exists(#private, :true), '
+        '#all = :all';
+
+    String addExpr;
     if (version.uploader != null) {
-      updateExpression.write(' ADD uploaders :uploader, download :zero');
-      expressionAttributeValues[':uploader'] = Ddb.ss({version.uploader!});
-      expressionAttributeValues[':zero'] = Ddb.n(0);
+      exprNames['#uploaders'] = 'uploaders';
+      exprValues[':uploader'] = Ddb.ss({version.uploader!});
+      addExpr = '#uploaders :uploader, #download :zero';
     } else {
-      updateExpression.write(' ADD download :zero');
-      expressionAttributeValues[':zero'] = Ddb.n(0);
+      addExpr = '#download :zero';
     }
 
     await client.call('UpdateItem', {
       'TableName': table,
       'Key': {'name': Ddb.s(name)},
-      'UpdateExpression': updateExpression.toString(),
-      'ExpressionAttributeNames': expressionAttributeNames,
-      'ExpressionAttributeValues': expressionAttributeValues,
+      'UpdateExpression': 'SET $setExpr ADD $addExpr',
+      'ExpressionAttributeNames': exprNames,
+      'ExpressionAttributeValues': exprValues,
     });
   }
 
@@ -100,9 +113,13 @@ class DynamoMetaStore extends MetaStore {
     await client.call('UpdateItem', {
       'TableName': table,
       'Key': {'name': Ddb.s(name)},
-      'UpdateExpression': 'ADD uploaders :u SET updatedAt = :ts',
+      'UpdateExpression': 'SET #updatedAt = :ts ADD #uploaders :u',
       'ConditionExpression': 'attribute_exists(#name)',
-      'ExpressionAttributeNames': {'#name': 'name'},
+      'ExpressionAttributeNames': {
+        '#name': 'name',
+        '#uploaders': 'uploaders',
+        '#updatedAt': 'updatedAt',
+      },
       'ExpressionAttributeValues': {
         ':u': Ddb.ss({email}),
         ':ts': Ddb.s(DateTime.now().toUtc().toIso8601String()),
@@ -115,9 +132,13 @@ class DynamoMetaStore extends MetaStore {
     await client.call('UpdateItem', {
       'TableName': table,
       'Key': {'name': Ddb.s(name)},
-      'UpdateExpression': 'DELETE uploaders :u SET updatedAt = :ts',
+      'UpdateExpression': 'SET #updatedAt = :ts DELETE #uploaders :u',
       'ConditionExpression': 'attribute_exists(#name)',
-      'ExpressionAttributeNames': {'#name': 'name'},
+      'ExpressionAttributeNames': {
+        '#name': 'name',
+        '#uploaders': 'uploaders',
+        '#updatedAt': 'updatedAt',
+      },
       'ExpressionAttributeValues': {
         ':u': Ddb.ss({email}),
         ':ts': Ddb.s(DateTime.now().toUtc().toIso8601String()),
@@ -127,14 +148,91 @@ class DynamoMetaStore extends MetaStore {
 
   @override
   void increaseDownloads(String name, String version) {
-    // Fire-and-forget atomic counter increment.
+    // Fire-and-forget total counter increment on the main table.
     client.call('UpdateItem', {
       'TableName': table,
       'Key': {'name': Ddb.s(name)},
-      'UpdateExpression': 'ADD download :one',
+      'UpdateExpression': 'ADD #download :one',
+      'ExpressionAttributeNames': {'#download': 'download'},
+      'ExpressionAttributeValues': {':one': Ddb.n(1)},
+    }).catchError((_) => <String, dynamic>{});
+
+    // Per-day + per-version counters on the stats table (MongoStore parity).
+    if (statsTable == null) return;
+    final now = DateTime.now().toUtc();
+    final date =
+        '${now.year}-${now.month.toString().padLeft(2, '0')}-${now.day.toString().padLeft(2, '0')}';
+    client.call('UpdateItem', {
+      'TableName': statsTable!,
+      'Key': {
+        'name': Ddb.s(name),
+        'date': Ddb.s(date),
+      },
+      'UpdateExpression': 'ADD #total :one, #v :one',
+      'ExpressionAttributeNames': {
+        '#total': 'total',
+        '#v': 'v_${version.replaceAll('.', '_')}',
+      },
       'ExpressionAttributeValues': {':one': Ddb.n(1)},
     }).catchError((_) => <String, dynamic>{});
   }
+
+  /// Fetch daily download counters for a package within an inclusive date range.
+  ///
+  /// Returns a list of `{date, total, perVersion}` records, newest first.
+  Future<List<DailyDownloadStats>> queryDailyDownloads(
+    String name, {
+    DateTime? from,
+    DateTime? to,
+    int limit = 30,
+  }) async {
+    if (statsTable == null) return const [];
+    final exprValues = <String, dynamic>{':n': Ddb.s(name)};
+    final kc = StringBuffer('#name = :n');
+    if (from != null) {
+      kc.write(' AND #date >= :from');
+      exprValues[':from'] = Ddb.s(_iso8601Date(from));
+    }
+    if (to != null) {
+      if (from == null) {
+        kc.write(' AND #date <= :to');
+      } else {
+        kc.clear();
+        kc.write('#name = :n AND #date BETWEEN :from AND :to');
+      }
+      exprValues[':to'] = Ddb.s(_iso8601Date(to));
+    }
+
+    final res = await client.call('Query', {
+      'TableName': statsTable!,
+      'KeyConditionExpression': kc.toString(),
+      'ExpressionAttributeNames': {'#name': 'name', '#date': 'date'},
+      'ExpressionAttributeValues': exprValues,
+      'ScanIndexForward': false,
+      'Limit': limit,
+    });
+    final items = (res['Items'] as List? ?? const [])
+        .cast<Map<String, dynamic>>()
+        .map(Ddb.decodeItem)
+        .toList();
+    return items.map((m) {
+      final perVersion = <String, int>{};
+      m.forEach((k, v) {
+        if (k.startsWith('v_') && v is int) {
+          perVersion[k.substring(2).replaceAll('_', '.')] = v;
+        }
+      });
+      return DailyDownloadStats(
+        name: m['name'] as String,
+        date: m['date'] as String,
+        total: (m['total'] as int?) ?? 0,
+        perVersion: perVersion,
+      );
+    }).toList();
+  }
+
+  String _iso8601Date(DateTime d) =>
+      '${d.year}-${d.month.toString().padLeft(2, '0')}-${d.day.toString().padLeft(2, '0')}';
 
   @override
   Future<UnpubQueryResult> queryPackages({
@@ -245,12 +343,47 @@ class DynamoMetaStore extends MetaStore {
     return out;
   }
 
-  /// Inverse of [_normalizeForDdb] — currently a passthrough but kept as a hook.
-  Map<String, dynamic> _restoreFromDdb(Map<String, dynamic> input) => input;
+  /// Convert DateTime-shaped strings back to DateTime so generated
+  /// fromJson constructors (which assume identity casts) succeed.
+  Map<String, dynamic> _restoreFromDdb(Map<String, dynamic> input) {
+    final out = <String, dynamic>{};
+    input.forEach((k, v) {
+      if (k == 'createdAt' || k == 'updatedAt') {
+        if (v is String) {
+          out[k] = DateTime.parse(v);
+          return;
+        }
+      }
+      out[k] = v;
+    });
+    return out;
+  }
 
   String _encodeToken(Map<String, dynamic> lek) =>
       base64Url.encode(utf8.encode(json.encode(lek)));
 
   Map<String, dynamic> _decodeToken(String token) =>
       json.decode(utf8.decode(base64Url.decode(token))) as Map<String, dynamic>;
+}
+
+/// Daily download counts returned by [DynamoMetaStore.queryDailyDownloads].
+class DailyDownloadStats {
+  final String name;
+  final String date;
+  final int total;
+  final Map<String, int> perVersion;
+
+  DailyDownloadStats({
+    required this.name,
+    required this.date,
+    required this.total,
+    required this.perVersion,
+  });
+
+  Map<String, dynamic> toJson() => {
+        'name': name,
+        'date': date,
+        'total': total,
+        'perVersion': perVersion,
+      };
 }

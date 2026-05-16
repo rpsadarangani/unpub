@@ -1,0 +1,10 @@
+**/.dart_tool/
+**/.packages
+**/pubspec.lock
+**/build/
+**/.idea/
+**/.vscode/
+**/.git/
+**/.code-review-graph/
+**/node_modules/
+**/*.log
