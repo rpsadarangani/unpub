@@ -21,9 +21,14 @@ Router _$AppRouter(App service) {
   router.add('DELETE', r'/api/packages/<name>/uploaders/<email>',
       service.removeUploader);
   router.add('GET', r'/webapi/packages', service.getPackages);
+  router.add('GET', r'/webapi/upstream-search', service.upstreamSearch);
+  router.add(
+      'POST', r'/webapi/upstream-cache/<name>', service.upstreamCacheNow);
   router.add('GET', r'/packages/<name>.json', service.getPackageVersions);
   router.add(
       'GET', r'/webapi/package/<name>/<version>', service.getPackageDetail);
+  router.add('GET', r'/documentation/<path|.*>', service.documentation);
+  router.add('GET', r'/api/archives/<archive>', service.archives);
   router.add('GET', r'/', service.indexHtml);
   router.add('GET', r'/packages', service.indexHtml);
   router.add('GET', r'/packages/<name>', service.indexHtml);
