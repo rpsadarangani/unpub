@@ -7,11 +7,42 @@ on:
     branches: [master, main]
 
 jobs:
-  dart:
-    name: dart analyze + test
+  web:
+    name: web (typescript) build
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - name: install
+        working-directory: unpub/web
+        run: |
+          if [ -f pnpm-lock.yaml ]; then corepack enable && pnpm install --frozen-lockfile; \
+          elif [ -f package-lock.json ]; then npm ci; \
+          else npm install; fi
+      - name: typecheck
+        working-directory: unpub/web
+        run: npm run typecheck
+      - name: build
+        working-directory: unpub/web
+        run: npm run build
+      - uses: actions/upload-artifact@v4
+        with:
+          name: unpub-index-html-dart
+          path: unpub/lib/src/static/index.html.dart
+
+  dart:
+    name: dart analyze + test
+    needs: web
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: unpub-index-html-dart
+          path: unpub/lib/src/static/
 
       - uses: dart-lang/setup-dart@v1
         with:

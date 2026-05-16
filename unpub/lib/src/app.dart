@@ -374,6 +374,14 @@ class App {
   @Route.get('/packages/<name>/versions/<version>.tar.gz')
   Future<shelf.Response> download(
       shelf.Request req, String name, String version) async {
+    // Versions like `17.2.1+1` arrive URL-encoded (`%2B`) and need to be
+    // decoded before we match them against the meta store.
+    try {
+      version = Uri.decodeComponent(version);
+    } catch (_) {
+      // Leave version as-is if decoding fails — handler below will 404.
+    }
+
     var package = await metaStore.queryPackage(name);
 
     // Cache-on-miss: pull metadata from upstream so subsequent fetches see it.
@@ -770,6 +778,69 @@ class App {
     return _okWithJson({'data': data.toJson()});
   }
 
+  // Search upstream (pub.dev by default) and return its raw response so the
+  // UI can show packages we haven't cached yet. Reads only — no writes.
+  @Route.get('/webapi/upstream-search')
+  Future<shelf.Response> upstreamSearch(shelf.Request req) async {
+    final q = (req.requestedUri.queryParameters['q'] ?? '').trim();
+    if (q.isEmpty) {
+      return _okWithJson({'data': {'packages': []}});
+    }
+    try {
+      final url = Uri.parse(upstream).resolve('/api/search').replace(
+          queryParameters: {'q': q});
+      final res = await _upstreamClient.get(url);
+      if (res.statusCode != 200) {
+        return _okWithJson({'data': {'packages': []}});
+      }
+      final body = json.decode(res.body);
+      final raw = ((body is Map ? body['packages'] : null) as List?) ?? const [];
+      // Normalise to {name, url} so the UI doesn't depend on pub.dev's exact shape.
+      final pkgs = raw
+          .whereType<Map>()
+          .map((m) => {'name': (m['package'] ?? '').toString()})
+          .where((m) => (m['name'] as String).isNotEmpty)
+          .toList();
+      return _okWithJson({'data': {'packages': pkgs}});
+    } catch (_) {
+      return _okWithJson({'data': {'packages': []}});
+    }
+  }
+
+  // Force-cache a package from upstream (used by the UI's "Pull from upstream"
+  // button). Pulls metadata, persists every version, then pre-fetches the
+  // latest tarball into S3 so the next `dart pub get` is a warm hit.
+  @Route.post('/webapi/upstream-cache/<name>')
+  Future<shelf.Response> upstreamCacheNow(shelf.Request req, String name) async {
+    if (!cacheUpstream) {
+      return _badRequest('cacheUpstream is disabled on this server');
+    }
+    try {
+      final pkg = await _fetchAndCacheUpstreamPackage(name, force: true);
+      if (pkg == null) {
+        return _badRequest('upstream did not return $name',
+            status: HttpStatus.notFound);
+      }
+      String? latest;
+      if (pkg.versions.isNotEmpty) {
+        latest = pkg.versions.last.version;
+        try {
+          await _fetchAndCacheUpstreamTarball(name, latest);
+        } catch (_) {/* best-effort; the on-demand path will retry */}
+      }
+      return _okWithJson({
+        'data': {
+          'name': name,
+          'versions': pkg.versions.length,
+          'latest': latest,
+        }
+      });
+    } catch (e) {
+      return _badRequest('failed to cache $name: $e',
+          status: HttpStatus.badGateway);
+    }
+  }
+
   @Route.get('/packages/<name>.json')
   Future<shelf.Response> getPackageVersions(
       shelf.Request req, String name) async {
@@ -793,7 +864,17 @@ class App {
   @Route.get('/webapi/package/<name>/<version>')
   Future<shelf.Response> getPackageDetail(
       shelf.Request req, String name, String version) async {
+    // `dart pub` URL-encodes `+` in versions (`17.2.1+1` -> `17.2.1%2B1`);
+    // shelf_router decodes once, but be defensive in case a client double-
+    // encodes.
+    try {
+      version = Uri.decodeComponent(version);
+    } catch (_) {/* leave as-is */}
+
     var package = await metaStore.queryPackage(name);
+    if (package == null && cacheUpstream) {
+      package = await _fetchAndCacheUpstreamPackage(name);
+    }
     if (package == null) {
       return _okWithJson({'error': 'package not exists'});
     }
@@ -804,12 +885,21 @@ class App {
     } else {
       packageVersion =
           package.versions.firstWhereOrNull((item) => item.version == version);
+      // Metadata may be stale (we cached an older snapshot); refresh once.
+      if (packageVersion == null && cacheUpstream) {
+        package = await _fetchAndCacheUpstreamPackage(name, force: true);
+        if (package != null) {
+          packageVersion = package.versions
+              .firstWhereOrNull((item) => item.version == version);
+        }
+      }
     }
-    if (packageVersion == null) {
+    if (packageVersion == null || package == null) {
       return _okWithJson({'error': 'version not exists'});
     }
+    final pkg = package;
 
-    var versions = package.versions
+    var versions = pkg.versions
         .map((v) => DetailViewVersion(v.version, v.createdAt))
         .toList();
     versions.sort((a, b) {
@@ -835,11 +925,11 @@ class App {
     var depMap = (pubspec['dependencies'] as Map? ?? {}).cast<String, String>();
 
     var data = WebapiDetailView(
-      package.name,
+      pkg.name,
       packageVersion.version,
       packageVersion.pubspec['description'] ?? '',
       packageVersion.pubspec['homepage'] ?? '',
-      package.uploaders ?? [],
+      pkg.uploaders ?? [],
       packageVersion.createdAt,
       packageVersion.readme,
       packageVersion.changelog,
@@ -859,6 +949,34 @@ class App {
   Future<shelf.Response> indexHtml(shelf.Request req) async {
     return shelf.Response.ok(index_html.content,
         headers: {HttpHeaders.contentTypeHeader: ContentType.html.mimeType});
+  }
+
+  // /documentation/<name>/<version>/ and any other read-only pub.dev page
+  // that we don't render locally — redirect to the upstream so the user
+  // sees something useful instead of 404.
+  @Route.get('/documentation/<path|.*>')
+  Future<shelf.Response> documentation(shelf.Request req, String path) async {
+    return shelf.Response.found(
+        Uri.parse(upstream).resolve('/documentation/$path').toString());
+  }
+
+  // pub.dev exposes tarballs at /api/archives/<name>-<version>.tar.gz.
+  // Pub clients that have cached an old `archive_url` may still hit this
+  // form. Redirect to our canonical /packages/<name>/versions/<v>.tar.gz.
+  @Route.get('/api/archives/<archive>')
+  Future<shelf.Response> archives(shelf.Request req, String archive) async {
+    final stripped = archive.endsWith('.tar.gz')
+        ? archive.substring(0, archive.length - '.tar.gz'.length)
+        : archive;
+    final dash = stripped.indexOf('-');
+    if (dash < 0) {
+      return shelf.Response.notFound('Not Found');
+    }
+    final name = stripped.substring(0, dash);
+    final version = stripped.substring(dash + 1);
+    return shelf.Response.found(_resolveUrl(
+            req, '/packages/$name/versions/${Uri.encodeComponent(version)}.tar.gz')
+        .toString());
   }
 
   @Route.get('/main.dart.js')

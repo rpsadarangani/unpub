@@ -14,10 +14,36 @@ const _tokenEndpoint = 'https://oauth2.googleapis.com/token';
 const _authEndpoint = 'https://accounts.google.com/o/oauth2/auth';
 const _scopes = ['openid', 'https://www.googleapis.com/auth/userinfo.email'];
 
-get _identifier => utf8.decode(base64.decode(
-    r'NDY4NDkyNDU2MjM5LTJja2wxdTB1dGloOHRzZWtnMGxpZ2NpY2VqYm8wbnZkLmFwcHMuZ29vZ2xldXNlcmNvbnRlbnQuY29t'));
-get _secret => utf8
-    .decode(base64.decode(r'R09DU1BYLUxHMWZTV052UjA0S0NrWVZRMTVGS3J1cGJ5bFk='));
+/// OAuth client credentials are read from the environment.
+///
+/// Set:
+///   UNPUB_OAUTH_CLIENT_ID
+///   UNPUB_OAUTH_CLIENT_SECRET
+///
+/// The upstream copy of this file shipped hard-coded Google OAuth client
+/// credentials inline. Those were flagged by GitHub secret scanning, so
+/// we read from env vars instead. Operators wiring up the auth CLI need
+/// to provision their own Google OAuth 2.0 Web client and export those
+/// two variables before running `unpub_auth`.
+String get _identifier {
+  final v = Platform.environment['UNPUB_OAUTH_CLIENT_ID'] ?? '';
+  if (v.isEmpty) {
+    throw StateError(
+        'UNPUB_OAUTH_CLIENT_ID is not set. Provision a Google OAuth 2.0 '
+        'client and export UNPUB_OAUTH_CLIENT_ID + UNPUB_OAUTH_CLIENT_SECRET.');
+  }
+  return v;
+}
+
+String get _secret {
+  final v = Platform.environment['UNPUB_OAUTH_CLIENT_SECRET'] ?? '';
+  if (v.isEmpty) {
+    throw StateError(
+        'UNPUB_OAUTH_CLIENT_SECRET is not set. Provision a Google OAuth 2.0 '
+        'client and export UNPUB_OAUTH_CLIENT_ID + UNPUB_OAUTH_CLIENT_SECRET.');
+  }
+  return v;
+}
 
 enum Flow {
   login,
