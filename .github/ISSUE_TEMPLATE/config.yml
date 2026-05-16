@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Security issue
+    url: https://github.com/rpsadarangani/unpub/security/advisories/new
+    about: Please report security vulnerabilities privately (see SECURITY.md).
+  - name: Discussion
+    url: https://github.com/rpsadarangani/unpub/discussions
+    about: Questions, "how do I…?", or design discussion belong here, not in issues.

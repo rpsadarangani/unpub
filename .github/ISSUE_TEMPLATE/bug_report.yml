@@ -1,0 +1,52 @@
+name: Bug report
+description: Something is broken — server crash, wrong behaviour, unexpected error.
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to file a bug. Please include enough information so the bug can be reproduced from a clean checkout.
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: Describe the bug. Include any error message exactly as it appeared.
+      placeholder: |
+        Calling `dart pub publish` against unpub returned 500 with...
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Reproduction
+      description: Minimal steps. `curl` commands or a tiny Dart snippet are perfect.
+      placeholder: |
+        1. `docker compose -f docker-compose.dev.yml up -d minio dynamodb-local`
+        2. `dart pub publish --server=http://localhost:4000 --force`
+        3. See error...
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: Release tag, Docker image digest, or commit SHA.
+      placeholder: "v0.1.0 / ghcr.io/rpsadarangani/unpub@sha256:..."
+    validations:
+      required: true
+  - type: dropdown
+    id: mode
+    attributes:
+      label: Storage mode
+      options:
+        - dynamo (DynamoDB metadata, S3 tarballs)
+        - s3only (S3 metadata + tarballs)
+        - other / custom
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs / `/metrics` output
+      description: Server logs, relevant DynamoDB / S3 errors, and the corresponding `/metrics` snippet if useful.
+      render: shell
