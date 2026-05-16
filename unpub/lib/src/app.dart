@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'package:collection/collection.dart' show IterableExtension;
@@ -47,6 +48,27 @@ class App {
   final Future<void> Function(
       Map<String, dynamic> pubspec, String uploaderEmail)? uploadValidator;
 
+  /// When `true`, on a cache miss the server fetches the package metadata
+  /// (and tarballs) from [upstream], stores them locally, and serves the
+  /// cached copy on subsequent requests — Athens-style pull-through caching.
+  /// When `false`, cache misses are served by HTTP `302` to the upstream
+  /// (original behaviour).
+  final bool cacheUpstream;
+
+  /// Email recorded as the "uploader" on packages mirrored from upstream.
+  /// Defaults to `upstream@<host>`.
+  final String? upstreamUploaderEmail;
+
+  /// HTTP client used to fetch from [upstream]. Override in tests.
+  final http.Client _upstreamClient;
+
+  /// In-flight upstream metadata fetches keyed by package name — dedupes
+  /// thundering herds so N concurrent first-fetches collapse to 1 upstream call.
+  final Map<String, Future<UnpubPackage?>> _inflightMeta = {};
+
+  /// In-flight upstream tarball fetches keyed by `<name>@<version>`.
+  final Map<String, Future<List<int>>> _inflightTarballs = {};
+
   App({
     required this.metaStore,
     required this.packageStore,
@@ -55,7 +77,10 @@ class App {
     this.overrideUploaderEmail,
     this.uploadValidator,
     this.proxy_origin,
-  });
+    this.cacheUpstream = false,
+    this.upstreamUploaderEmail,
+    http.Client? upstreamClient,
+  }) : _upstreamClient = upstreamClient ?? http.Client();
 
   static shelf.Response _okWithJson(Map<String, dynamic> data) =>
       shelf.Response.ok(
@@ -154,8 +179,13 @@ class App {
     var package = await metaStore.queryPackage(name);
 
     if (package == null) {
-      return shelf.Response.found(
-          Uri.parse(upstream).resolve('/api/packages/$name').toString());
+      if (cacheUpstream) {
+        package = await _fetchAndCacheUpstreamPackage(name);
+      }
+      if (package == null) {
+        return shelf.Response.found(
+            Uri.parse(upstream).resolve('/api/packages/$name').toString());
+      }
     }
 
     package.versions.sort((a, b) {
@@ -185,6 +215,9 @@ class App {
     }
 
     var package = await metaStore.queryPackage(name);
+    if (package == null && cacheUpstream) {
+      package = await _fetchAndCacheUpstreamPackage(name);
+    }
     if (package == null) {
       return shelf.Response.found(Uri.parse(upstream)
           .resolve('/api/packages/$name/versions/$version')
@@ -204,10 +237,35 @@ class App {
   Future<shelf.Response> download(
       shelf.Request req, String name, String version) async {
     var package = await metaStore.queryPackage(name);
+
+    // Cache-on-miss: pull metadata from upstream so subsequent fetches see it.
+    if (package == null && cacheUpstream) {
+      package = await _fetchAndCacheUpstreamPackage(name);
+    }
     if (package == null) {
       return shelf.Response.found(Uri.parse(upstream)
           .resolve('/packages/$name/versions/$version.tar.gz')
           .toString());
+    }
+
+    final hasVersion = package.versions.any((v) => v.version == version);
+    if (!hasVersion && cacheUpstream) {
+      // Metadata is stale — refresh from upstream so we know the new version.
+      package = await _fetchAndCacheUpstreamPackage(name, force: true);
+    }
+
+    // Pull from upstream when the tarball isn't in our store yet — covers
+    // both first-touch and the case where metadata was cached previously
+    // but the tarball itself is still missing.
+    if (cacheUpstream) {
+      try {
+        final present = await packageStore.exists(name, version);
+        if (!present) {
+          await _fetchAndCacheUpstreamTarball(name, version);
+        }
+      } catch (_) {
+        // Falls back to packageStore.download which will surface the real error.
+      }
     }
 
     if (isPubClient(req)) {
@@ -223,6 +281,118 @@ class App {
         headers: {HttpHeaders.contentTypeHeader: ContentType.binary.mimeType},
       );
     }
+  }
+
+  /// Fetch a package's metadata from [upstream] and persist each version
+  /// through [metaStore]. Returns the freshly cached `UnpubPackage`, or
+  /// `null` when upstream has nothing.
+  ///
+  /// Dedupes concurrent calls for the same package name through
+  /// [_inflightMeta] so cold-cache spikes only hit upstream once.
+  Future<UnpubPackage?> _fetchAndCacheUpstreamPackage(
+    String name, {
+    bool force = false,
+  }) async {
+    if (!force) {
+      final existing = _inflightMeta[name];
+      if (existing != null) return existing;
+    }
+    final future = _doFetchAndCacheUpstreamPackage(name);
+    _inflightMeta[name] = future;
+    try {
+      return await future;
+    } finally {
+      _inflightMeta.remove(name);
+    }
+  }
+
+  Future<UnpubPackage?> _doFetchAndCacheUpstreamPackage(String name) async {
+    final url = Uri.parse(upstream).resolve('/api/packages/$name');
+    final res = await _upstreamClient.get(url);
+    if (res.statusCode == 404) return null;
+    if (res.statusCode ~/ 100 != 2) {
+      throw 'upstream $url returned ${res.statusCode}';
+    }
+    final body = json.decode(res.body) as Map<String, dynamic>;
+    final versionsRaw = (body['versions'] as List? ?? const [])
+        .cast<Map<String, dynamic>>();
+    final uploaderEmail = upstreamUploaderEmail ??
+        'upstream@${Uri.parse(upstream).host}';
+
+    // Build the in-memory UnpubPackage from the upstream payload so the
+    // caller can serve a response immediately without waiting for every
+    // version to land in the meta store. Persistence below is fire-and-forget.
+    final versions = versionsRaw
+        .map((v) => UnpubVersion(
+              v['version'] as String,
+              (v['pubspec'] as Map<String, dynamic>?) ??
+                  const <String, dynamic>{},
+              v['pubspec_yaml'] as String?,
+              uploaderEmail,
+              null,
+              null,
+              DateTime.now().toUtc(),
+            ))
+        .toList();
+    final now = DateTime.now().toUtc();
+    final synthetic = UnpubPackage(
+      name,
+      versions,
+      false,
+      [uploaderEmail],
+      now,
+      now,
+      0,
+    );
+
+    // Persist in the background — schedule on the next microtask so the
+    // caller can return before we kick off N concurrent meta-store writes.
+    Future.microtask(() => _persistUpstreamVersions(name, versions));
+    return synthetic;
+  }
+
+  Future<void> _persistUpstreamVersions(
+      String name, List<UnpubVersion> versions) async {
+    const concurrency = 8;
+    var i = 0;
+    while (i < versions.length) {
+      final chunk = versions.skip(i).take(concurrency).toList();
+      await Future.wait(chunk.map((v) async {
+        try {
+          await metaStore.addVersion(name, v);
+        } catch (_) {/* race / duplicate — ignore */}
+      }));
+      i += concurrency;
+    }
+  }
+
+  /// Pull a tarball from upstream and store it via [packageStore], unless
+  /// it already exists locally. Concurrent calls for the same version are
+  /// deduped through [_inflightTarballs].
+  Future<List<int>> _fetchAndCacheUpstreamTarball(
+      String name, String version) async {
+    final key = '$name@$version';
+    final existing = _inflightTarballs[key];
+    if (existing != null) return existing;
+    final future = _doFetchAndCacheUpstreamTarball(name, version);
+    _inflightTarballs[key] = future;
+    try {
+      return await future;
+    } finally {
+      _inflightTarballs.remove(key);
+    }
+  }
+
+  Future<List<int>> _doFetchAndCacheUpstreamTarball(
+      String name, String version) async {
+    final url = Uri.parse(upstream)
+        .resolve('/api/archives/$name-$version.tar.gz');
+    final res = await _upstreamClient.get(url);
+    if (res.statusCode ~/ 100 != 2) {
+      throw 'upstream tarball $url returned ${res.statusCode}';
+    }
+    await packageStore.upload(name, version, res.bodyBytes);
+    return res.bodyBytes;
   }
 
   @Route.get('/api/packages/versions/new')

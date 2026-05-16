@@ -34,6 +34,8 @@ Future<void> main(List<String> args) async {
       endpoint: env['AWS_S3_ENDPOINT'],
     ),
     overrideUploaderEmail: env['UNPUB_OVERRIDE_UPLOADER'],
+    cacheUpstream: env['UNPUB_CACHE_UPSTREAM'] == 'true',
+    upstream: env['UNPUB_UPSTREAM'] ?? 'https://pub.dev',
   );
 
   final port = int.parse(env['UNPUB_PORT'] ?? '4000');
