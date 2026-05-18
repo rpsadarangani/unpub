@@ -47,6 +47,12 @@ Future<void> main(List<String> args) async {
   // S3Store now uses the in-house S3Client + AwsCredentialChain, so it
   // signs every request with fresh STS web-identity credentials and
   // includes X-Amz-Security-Token. No periodic refresh needed.
+  // Behind TLS-terminating ingress (Istio gateway, ALB, nginx, …) the pod
+  // sees plain HTTP. `dart pub publish` reads the upload URL the server
+  // returns from `/api/packages/versions/new` and POSTs to it directly, so
+  // that URL must be the public HTTPS origin — otherwise the client tries
+  // `http://<host>:0/...` and times out. UNPUB_PUBLIC_URL is the override.
+  final publicUrl = env['UNPUB_PUBLIC_URL'];
   final app = unpub.App(
     metaStore: meta,
     packageStore: aws.S3Store(
@@ -58,6 +64,9 @@ Future<void> main(List<String> args) async {
     overrideUploaderEmail: env['UNPUB_OVERRIDE_UPLOADER'],
     cacheUpstream: env['UNPUB_CACHE_UPSTREAM'] == 'true',
     upstream: env['UNPUB_UPSTREAM'] ?? 'https://pub.dev',
+    proxy_origin: publicUrl != null && publicUrl.isNotEmpty
+        ? Uri.parse(publicUrl)
+        : null,
   );
 
   final server = await app.serve('0.0.0.0', port);
