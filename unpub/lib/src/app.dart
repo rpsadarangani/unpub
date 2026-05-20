@@ -644,8 +644,17 @@ class App {
           throw '$name is not a private package. Please upload it to https://pub.dev';
         }
 
-        // Check uploaders
-        if (package.uploaders?.contains(uploader) == false) {
+        // Skip the uploader ACL when the server is running in
+        // override-uploader mode — the deployment has already decided
+        // who is trusted, so per-package ACLs would just block legitimate
+        // republishes from any client. Same applies when the inferred
+        // uploader is empty (token-only auth path with no Google
+        // tokeninfo email).
+        final acl = package.uploaders ?? const [];
+        if (overrideUploaderEmail == null &&
+            uploader.isNotEmpty &&
+            acl.isNotEmpty &&
+            !acl.contains(uploader)) {
           throw '$uploader is not an uploader of $name';
         }
 
