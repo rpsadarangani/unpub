@@ -97,13 +97,14 @@ class SigV4Signer {
       bytes.map((b) => b.toRadixString(16).padLeft(2, '0')).join();
 
   static String _canonicalUri(String path) {
+    // The caller is expected to have URI-encoded the path segments already
+    // (e.g. S3Client._objectUri uses Uri.encodeComponent per segment). Per
+    // AWS SigV4 spec for S3, the canonical URI is the URI-encoded path —
+    // not re-encoded. Re-encoding here would turn `%2B` into `%252B` and
+    // produce `SignatureDoesNotMatch` for any key containing `+`, space,
+    // or other reserved characters.
     if (path.isEmpty) return '/';
-    // S3 requires unencoded path segments; STS/DDB encode segments.
-    return path
-        .split('/')
-        .map((segment) => Uri.encodeQueryComponent(segment).replaceAll('+', '%20'))
-        .join('/')
-        .replaceAll('%2F', '/');
+    return path.startsWith('/') ? path : '/$path';
   }
 
   static String _canonicalQueryString(Map<String, String> params) {
