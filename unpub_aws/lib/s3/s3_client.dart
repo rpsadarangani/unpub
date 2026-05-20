@@ -39,11 +39,18 @@ class S3Client {
   }
 
   Uri _objectUri(String key) {
+    // Encode each path segment per RFC 3986 + S3 SigV4 rules so the wire
+    // request matches what the SigV4 canonical URI sees. Reserved chars
+    // like `+` (common in semver build-metadata, e.g. `1.0.0+1`) become
+    // `%2B`, spaces become `%20`. Build the URL by string concatenation
+    // and `Uri.parse` to avoid `Uri.replace(path: ...)`'s ambiguous
+    // re-encoding of already-encoded paths.
     final base = Uri.parse(endpoint);
-    if (pathStyle) {
-      return base.replace(path: '/$bucket/$key');
-    }
-    return base.replace(host: '$bucket.${base.host}', path: '/$key');
+    final encodedKey = key.split('/').map(Uri.encodeComponent).join('/');
+    final host = pathStyle ? base.host : '$bucket.${base.host}';
+    final port = base.hasPort ? ':${base.port}' : '';
+    final path = pathStyle ? '/$bucket/$encodedKey' : '/$encodedKey';
+    return Uri.parse('${base.scheme}://$host$port$path');
   }
 
   Uri _bucketUri([Map<String, String>? query]) {
