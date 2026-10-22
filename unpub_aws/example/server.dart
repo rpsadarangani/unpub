@@ -70,6 +70,7 @@ Future<void> main(List<String> args) async {
     upstreamMetadataTtl: Duration(
         seconds: int.parse(env['UNPUB_UPSTREAM_METADATA_TTL'] ?? '600')),
     extraUpstreams: _extraUpstreams(env),
+    upstreamName: env['UNPUB_UPSTREAM_NAME'] ?? 'pub',
     proxy_origin:
         publicUrl != null && publicUrl.isNotEmpty ? Uri.parse(publicUrl) : null,
   );
@@ -94,9 +95,10 @@ String? _argValue(List<String> args, String flag) {
   return null;
 }
 
-/// Private upstreams from `UNPUB_UPSTREAM_<n>_URL` (+ `_TOKEN`, or
-/// `_USERNAME` / `_PASSWORD`), n = 1, 2, … until the first gap. They are
-/// consulted, in order, before `UNPUB_UPSTREAM`.
+/// Private upstreams from `UNPUB_UPSTREAM_<n>_URL` (+ `_NAME`, and `_TOKEN`
+/// or `_USERNAME` / `_PASSWORD`), n = 1, 2, … until the first gap. They are
+/// consulted, in order, before `UNPUB_UPSTREAM`. `_NAME` (default `<n>`) is
+/// the segment clients use to pin a dependency: `/u/<name>/`.
 List<unpub.Upstream> _extraUpstreams(Map<String, String> env) {
   final upstreams = <unpub.Upstream>[];
   for (var n = 1;; n++) {
@@ -104,6 +106,7 @@ List<unpub.Upstream> _extraUpstreams(Map<String, String> env) {
     if (url == null || url.isEmpty) break;
     upstreams.add(unpub.Upstream(
       url,
+      name: env['UNPUB_UPSTREAM_${n}_NAME'] ?? '$n',
       token: env['UNPUB_UPSTREAM_${n}_TOKEN'],
       username: env['UNPUB_UPSTREAM_${n}_USERNAME'],
       password: env['UNPUB_UPSTREAM_${n}_PASSWORD'],

@@ -6,6 +6,10 @@ import 'package:http/http.dart' as http;
 /// another unpub, …). Credentials are only ever sent to this upstream's own
 /// origin — never forwarded across redirects to signed CDN / storage hosts.
 class Upstream {
+  /// Short name; clients pin a dependency to this upstream with
+  /// `hosted: <unpub>/u/<name>/`. Lowercase letters, digits, `_` and `-`.
+  final String name;
+
   /// Repository base URL, including any path prefix
   /// (e.g. `https://dart.cloudsmith.io/<org>/<repo>/`).
   final Uri base;
@@ -15,8 +19,14 @@ class Upstream {
   final String? username;
   final String? password;
 
-  Upstream(String url, {this.token, this.username, this.password})
-      : base = Uri.parse(url.endsWith('/') ? url : '$url/');
+  Upstream(String url,
+      {required this.name, this.token, this.username, this.password})
+      : base = Uri.parse(url.endsWith('/') ? url : '$url/') {
+    if (!RegExp(r'^[a-z0-9_-]+$').hasMatch(name)) {
+      throw ArgumentError.value(name, 'name',
+          'upstream names may only use lowercase letters, digits, _ and -');
+    }
+  }
 
   /// Uploader recorded on packages mirrored from this upstream. Also used to
   /// find the upstream a cached package came from when refreshing it.
@@ -71,5 +81,5 @@ class Upstream {
   }
 
   @override
-  String toString() => base.toString();
+  String toString() => '$name ($base)';
 }

@@ -404,6 +404,8 @@ All settable through Helm values (see `charts/unpub/values.yaml`) or directly vi
 | `UNPUB_UPSTREAM` | `https://pub.dev` | primary upstream registry |
 | `UNPUB_UPSTREAM_TOKEN` / `UNPUB_UPSTREAM_USERNAME` + `UNPUB_UPSTREAM_PASSWORD` | unset | Bearer or Basic auth for the primary upstream |
 | `UNPUB_UPSTREAM_<n>_URL` | unset | private upstream `n` (1, 2, …), consulted before `UNPUB_UPSTREAM` |
+| `UNPUB_UPSTREAM_<n>_NAME` | `<n>` | name of upstream `n` in pinned URLs (`/u/<name>/`) |
+| `UNPUB_UPSTREAM_NAME` | `pub` | name of the primary upstream in pinned URLs |
 | `UNPUB_UPSTREAM_<n>_TOKEN` / `_USERNAME` + `_PASSWORD` | unset | Bearer or Basic auth for private upstream `n` |
 | `UNPUB_UPSTREAM_METADATA_TTL` | `600` | seconds before mirrored metadata is re-checked upstream for new versions |
 | `UNPUB_PUBLIC_URL` | unset | public HTTPS origin; required behind TLS-terminating ingress for `dart pub publish` |
@@ -450,6 +452,29 @@ fetched from the `archive_url` the upstream advertises.
 > unpub has no read authentication: anything mirrored from a private
 > upstream is downloadable by everyone who can reach unpub. Keep it on an
 > internal-only ingress.
+
+#### Pinning a dependency to one upstream
+
+Every upstream is also served under its own URL, `https://<unpub>/u/<name>/`
+(names from `extraUpstreams[].name` / `upstreamName`). A dependency hosted
+there is resolved **only** from that upstream: a miss is a 404 (no fallthrough
+to pub.dev), and a package already cached from a different upstream is not
+served. Only package metadata and tarball reads exist under `/u/`; publish
+to the root URL.
+
+```yaml
+dependencies:
+  oa_flights_sdk:
+    hosted: https://unpub.example.internal/u/cloudsmith/
+    version: ^1.5.5
+  path: ^1.9.0          # everything else via PUB_HOSTED_URL=https://unpub.example.internal
+```
+
+pub treats the hosted URL as part of a package's identity, so a package can
+come from only one URL in a dependency graph. Pin private packages; don't
+pin a public package (e.g. `path` to `/u/pub/`) that something else also
+pulls in transitively from the root URL, or version solving fails with
+"requires path from hosted on …".
 
 Add the private host to the egress allowlist below (for Cloudsmith:
 `dart.cloudsmith.io` and `dl.cloudsmith.io`).

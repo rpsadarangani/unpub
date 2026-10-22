@@ -92,7 +92,7 @@ void main() {
         packageStore: packageStore,
         cacheUpstream: true,
         upstreamMetadataTtl: ttl,
-        extraUpstreams: [Upstream(cs, token: 's3cret')],
+        extraUpstreams: [Upstream(cs, name: 'cloudsmith', token: 's3cret')],
         upstreamClient: MockClient((req) {
           calls.add(req);
           return handler(req);
@@ -228,8 +228,8 @@ void main() {
   });
 
   test('basic auth header', () async {
-    final u =
-        Upstream('https://repo.example/dart', username: 'u', password: 'p');
+    final u = Upstream('https://repo.example/dart',
+        name: 'repo', username: 'u', password: 'p');
     final client = MockClient((req) async {
       calls.add(req);
       return http.Response('{}', 200);
@@ -240,5 +240,102 @@ void main() {
     expect(calls.single.headers['authorization'],
         'Basic ${base64.encode(utf8.encode('u:p'))}');
     expect(u.uploaderEmail, 'upstream@repo.example/dart');
+  });
+
+  group('pinned /u/<name>/ URLs', () {
+    Future<shelf.Response> send(App a, String path,
+            {String method = 'GET'}) async =>
+        await a.handler(
+            shelf.Request(method, Uri.parse('http://unpub.test$path')));
+
+    Future<http.Response> both(http.Request req) async {
+      final url = req.url.toString();
+      if (url == '$cs/api/packages/oa_sdk') {
+        return http.Response(meta(cs, 'oa_sdk', ['1.0.0']), 200);
+      }
+      if (url == '$cs/packages/oa_sdk/versions/1.0.0') {
+        return http.Response.bytes([7, 7], 200);
+      }
+      if (url == 'https://pub.dev/api/packages/path') {
+        return http.Response(meta('https://pub.dev', 'path', ['1.9.1']), 200);
+      }
+      return http.Response('', 404);
+    }
+
+    test('only the named upstream is asked; archive_url keeps the pin',
+        () async {
+      final a = app(both);
+      final res = await send(a, '/u/cloudsmith/api/packages/oa_sdk');
+      expect(res.statusCode, 200);
+      final body = json.decode(await res.readAsString()) as Map;
+      expect(body['latest']['archive_url'],
+          'http://unpub.test/u/cloudsmith/packages/oa_sdk/versions/1.0.0.tar.gz');
+      expect(calls.map((c) => c.url.host), ['dart.cloudsmith.io']);
+
+      final tar =
+          await send(a, '/u/cloudsmith/packages/oa_sdk/versions/1.0.0.tar.gz');
+      expect(tar.statusCode, 200);
+      expect(packageStore.blobs['oa_sdk@1.0.0'], [7, 7]);
+    });
+
+    test('pinning the primary upstream skips the private ones', () async {
+      final a = app(both);
+      final res = await send(a, '/u/pub/api/packages/path');
+      expect(await versionsOf(res), ['1.9.1']);
+      expect(calls.map((c) => c.url.host), ['pub.dev']);
+    });
+
+    test('a miss on the pinned upstream is a 404, never pub.dev', () async {
+      final a = app(both);
+      final res = await send(a, '/u/cloudsmith/api/packages/path');
+      expect(res.statusCode, 404);
+      expect(calls.map((c) => c.url.host), ['dart.cloudsmith.io']);
+    });
+
+    test('a package cached from another upstream is not served', () async {
+      final a = app(both);
+      await send(a, '/api/packages/path'); // mirrored from pub.dev
+      await Future.delayed(Duration.zero);
+      calls.clear();
+      final res = await send(a, '/u/cloudsmith/api/packages/path');
+      expect(res.statusCode, 404);
+      expect(calls, isEmpty);
+    });
+
+    test('unknown upstreams and non-read routes are 404', () async {
+      final a = app(both);
+      expect((await send(a, '/u/nope/api/packages/oa_sdk')).statusCode, 404);
+      expect(
+          (await send(a, '/u/cloudsmith/api/packages/versions/new')).statusCode,
+          404);
+      expect(
+          (await send(a, '/u/cloudsmith/api/packages/versions/newUpload',
+                  method: 'POST'))
+              .statusCode,
+          404);
+      expect(calls, isEmpty);
+    });
+
+    test('metric route labels stay bounded', () async {
+      final a = app(both);
+      await send(a, '/u/cloudsmith/api/packages/oa_sdk');
+      await send(a, '/u/nope/api/packages/x');
+      final metrics = a.metrics.render();
+      expect(metrics,
+          contains('route="/u/cloudsmith/api/packages/<name>",method="GET"'));
+      expect(metrics, contains('route="/u/<unknown>/api/packages/<name>"'));
+      expect(metrics, isNot(contains('oa_sdk')));
+    });
+
+    test('upstream names must be unique and URL-safe', () {
+      expect(() => Upstream(cs, name: 'Cloud Smith'), throwsArgumentError);
+      expect(
+          () => App(
+                metaStore: metaStore,
+                packageStore: packageStore,
+                extraUpstreams: [Upstream(cs, name: 'pub')],
+              ),
+          throwsArgumentError);
+    });
   });
 }

@@ -7,6 +7,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 ## [Unreleased]
 
 ### Added
+- Per-upstream URLs: `/u/<name>/` serves the pub API pinned to one upstream (no fallthrough), so a pubspec can pick the source per dependency with `hosted: <unpub>/u/<name>/`. Names via `UNPUB_UPSTREAM_<n>_NAME` / `UNPUB_UPSTREAM_NAME` (chart `extraUpstreams[].name`, `upstreamName`).
+
+## [0.2.6] - 2026-10-22
+
+### Added
 - Private upstreams (`UNPUB_UPSTREAM_<n>_URL` + `_TOKEN` or `_USERNAME`/`_PASSWORD`; chart `extraUpstreams`), consulted before `UNPUB_UPSTREAM`; only a 404 falls through. Auth for the primary upstream via `UNPUB_UPSTREAM_TOKEN` / `_USERNAME` / `_PASSWORD`. Credentials never follow cross-host redirects.
 - `UNPUB_UPSTREAM_METADATA_TTL` (chart `upstreamMetadataTtlSeconds`, default 600s) and chart `publicUrl`.
 

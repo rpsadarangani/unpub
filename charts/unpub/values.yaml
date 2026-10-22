@@ -32,8 +32,15 @@ upstreamMetadataTtlSeconds: 600
 #   UNPUB_UPSTREAM_<n>_TOKEN                      (Bearer), or
 #   UNPUB_UPSTREAM_<n>_USERNAME / _PASSWORD       (Basic)
 # where <n> is the 1-based position in this list.
+# `name` (default: the 1-based position) is the path segment a pubspec uses
+# to pin a dependency to that upstream:
+#   hosted: https://<unpub-host>/u/<name>/
 extraUpstreams: []
 # - url: https://dart.cloudsmith.io/<org>/<repo>/
+#   name: cloudsmith
+
+# Name of the primary `upstream` in pinned URLs (`/u/<upstreamName>/`).
+upstreamName: pub
 
 # Public HTTPS origin clients use. Required behind a TLS-terminating
 # ingress so `dart pub publish` gets an https upload URL.

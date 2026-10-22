@@ -46,11 +46,17 @@ spec:
               value: {{ ternary "true" "false" .Values.cacheUpstream | quote }}
             - name: UNPUB_UPSTREAM
               value: {{ .Values.upstream | quote }}
+            - name: UNPUB_UPSTREAM_NAME
+              value: {{ .Values.upstreamName | quote }}
             - name: UNPUB_UPSTREAM_METADATA_TTL
               value: {{ .Values.upstreamMetadataTtlSeconds | quote }}
             {{- range $i, $u := .Values.extraUpstreams }}
             - name: UNPUB_UPSTREAM_{{ add1 $i }}_URL
               value: {{ $u.url | quote }}
+            {{- with $u.name }}
+            - name: UNPUB_UPSTREAM_{{ add1 $i }}_NAME
+              value: {{ . | quote }}
+            {{- end }}
             {{- end }}
             {{- if .Values.publicUrl }}
             - name: UNPUB_PUBLIC_URL

@@ -75,8 +75,15 @@ class App {
   /// names from being shadowed by a public package (dependency confusion).
   final List<Upstream> extraUpstreams;
 
+  /// Name of the primary [upstream] in pinned URLs (`/u/<name>/`).
+  final String upstreamName;
+
   /// [extraUpstreams] followed by the primary [upstream], in lookup order.
   late final List<Upstream> _upstreams;
+
+  /// Request-context key holding the [Upstream] a `/u/<name>/` request is
+  /// pinned to.
+  static const _pinKey = 'unpub.upstream';
 
   /// How long mirrored package metadata is served from the local store
   /// before it is re-checked against [upstream] for new versions.
@@ -132,16 +139,22 @@ class App {
     this.upstreamPassword,
     this.upstreamMetadataTtl = const Duration(minutes: 10),
     this.extraUpstreams = const [],
+    this.upstreamName = 'pub',
     http.Client? upstreamClient,
     Metrics? metrics,
   }) : _upstreamClient = upstreamClient ?? http.Client() {
     _upstreams = [
       ...extraUpstreams,
       Upstream(upstream,
+          name: upstreamName,
           token: upstreamToken,
           username: upstreamUsername,
           password: upstreamPassword),
     ];
+    final names = _upstreams.map((u) => u.name).toList();
+    if (names.toSet().length != names.length) {
+      throw ArgumentError('upstream names must be unique: $names');
+    }
     this.metrics = metrics ?? Metrics();
     _registerMetrics();
   }
@@ -261,10 +274,17 @@ class App {
   }
 
   Future<HttpServer> serve([String host = '0.0.0.0', int port = 4000]) async {
-    var handler = const shelf.Pipeline()
+    var server = await shelf_io.serve(handler, host, port);
+    return server;
+  }
+
+  /// The full request handler (middleware + routes) that [serve] runs.
+  shelf.Handler get handler {
+    return const shelf.Pipeline()
         .addMiddleware(corsHeaders())
         .addMiddleware(shelf.logRequests())
         .addMiddleware(_metricsMiddleware())
+        .addMiddleware(_upstreamPinMiddleware())
         .addHandler((req) async {
       if (req.url.path == 'metrics') {
         return shelf.Response.ok(
@@ -280,8 +300,49 @@ class App {
       var res = await router.call(req);
       return res;
     });
-    var server = await shelf_io.serve(handler, host, port);
-    return server;
+  }
+
+  /// Read-only routes reachable under `/u/<upstream>/`.
+  static final _pinnableRoutes = [
+    RegExp(r'^api/packages/[^/]+$'),
+    RegExp(r'^api/packages/[^/]+/versions/[^/]+$'),
+    RegExp(r'^packages/[^/]+/versions/[^/]+\.tar\.gz$'),
+  ];
+
+  /// Serves `/u/<name>/...` as the normal pub API pinned to one upstream, so
+  /// a pubspec can choose the source per dependency
+  /// (`hosted: https://unpub.example/u/<name>/`). Only package metadata and
+  /// tarball reads are available there; publishing stays on the root URL.
+  shelf.Middleware _upstreamPinMiddleware() {
+    return (inner) {
+      return (req) {
+        final segments = req.url.pathSegments;
+        if (segments.isEmpty || segments.first != 'u') return inner(req);
+        final pin = segments.length > 1
+            ? _upstreams.firstWhereOrNull((u) => u.name == segments[1])
+            : null;
+        if (pin == null || !cacheUpstream) {
+          return shelf.Response.notFound('unknown upstream');
+        }
+        final rest = segments.skip(2).join('/');
+        if (req.method != 'GET' ||
+            !_pinnableRoutes.any((r) => r.hasMatch(rest))) {
+          return shelf.Response.notFound('Not Found');
+        }
+        return inner(req.change(
+          path: 'u/${pin.name}',
+          context: {_pinKey: pin},
+        ));
+      };
+    };
+  }
+
+  Upstream? _pinOf(shelf.Request req) => req.context[_pinKey] as Upstream?;
+
+  /// `/u/<name>` for pinned requests, so URLs we hand out keep the pin.
+  String _pinPrefix(shelf.Request req) {
+    final pin = _pinOf(req);
+    return pin == null ? '' : '/u/${pin.name}';
   }
 
   /// Records `unpub_http_requests_total` + `unpub_http_request_duration_seconds`
@@ -312,6 +373,12 @@ class App {
 
   /// Map concrete request paths to a low-cardinality label.
   String _routeTemplate(String path) {
+    final segments = path.split('/').where((s) => s.isNotEmpty).toList();
+    if (segments.length >= 2 && segments.first == 'u') {
+      final known = _upstreams.any((u) => u.name == segments[1]);
+      return '/u/${known ? segments[1] : '<unknown>'}'
+          '${_routeTemplate(segments.skip(2).join('/'))}';
+    }
     final p = path.startsWith('/') ? path : '/$path';
     if (p.startsWith('/api/packages/versions/new')) {
       return '/api/packages/versions/new';
@@ -344,8 +411,8 @@ class App {
     var name = item.pubspec['name'] as String;
     var version = item.version;
     return {
-      'archive_url':
-          _resolveUrl(req, '/packages/$name/versions/$version.tar.gz'),
+      'archive_url': _resolveUrl(
+          req, '${_pinPrefix(req)}/packages/$name/versions/$version.tar.gz'),
       'pubspec': item.pubspec,
       'version': version,
     };
@@ -361,8 +428,9 @@ class App {
 
   @Route.get('/api/packages/<name>')
   Future<shelf.Response> getVersions(shelf.Request req, String name) async {
-    var package = await _resolvePackage(name);
+    var package = await _resolvePackage(name, pin: _pinOf(req));
     if (package == null) {
+      if (_pinOf(req) != null) return shelf.Response.notFound('Not Found');
       return shelf.Response.found(
           Uri.parse(upstream).resolve('/api/packages/$name').toString());
     }
@@ -396,8 +464,9 @@ class App {
       print(err);
     }
 
-    var package = await _resolvePackage(name);
+    var package = await _resolvePackage(name, pin: _pinOf(req));
     if (package == null) {
+      if (_pinOf(req) != null) return shelf.Response.notFound('Not Found');
       return shelf.Response.found(Uri.parse(upstream)
           .resolve('/api/packages/$name/versions/$version')
           .toString());
@@ -423,8 +492,9 @@ class App {
       // Leave version as-is if decoding fails — handler below will 404.
     }
 
-    var package = await _resolvePackage(name);
+    var package = await _resolvePackage(name, pin: _pinOf(req));
     if (package == null) {
+      if (_pinOf(req) != null) return shelf.Response.notFound('Not Found');
       return shelf.Response.found(Uri.parse(upstream)
           .resolve('/packages/$name/versions/$version.tar.gz')
           .toString());
@@ -492,10 +562,21 @@ class App {
   /// Mirrored packages are re-checked against their upstream once per
   /// [upstreamMetadataTtl] so new upstream releases become visible; if the
   /// upstream is unreachable the cached copy is served instead.
-  Future<UnpubPackage?> _resolvePackage(String name) async {
+  ///
+  /// With [pin], only that upstream is consulted, and a package stored from
+  /// anywhere else (another upstream, or published here) is treated as absent.
+  Future<UnpubPackage?> _resolvePackage(String name, {Upstream? pin}) async {
     final cached = await metaStore.queryPackage(name);
+    if (pin != null && cached != null && _mirrorSource(cached) != pin) {
+      return null;
+    }
     if (!cacheUpstream) return cached;
-    if (cached == null) return _fetchAndCacheUpstreamPackage(name);
+    if (cached == null) {
+      final fetched = await _fetchAndCacheUpstreamPackage(name, only: pin);
+      return pin != null && fetched != null && _mirrorSource(fetched) != pin
+          ? null
+          : fetched;
+    }
 
     final source = _mirrorSource(cached);
     final last = _lastUpstreamRefresh[name];
@@ -518,7 +599,8 @@ class App {
   /// local store is missing. Returns the cached and upstream versions merged,
   /// or `null` when no upstream has the package.
   ///
-  /// With [cached] set, only the upstream it was mirrored from is asked.
+  /// With [only] set, only that upstream is asked; with [cached] set, only
+  /// the upstream it was mirrored from.
   /// Otherwise [_upstreams] are tried in order and only a 404 falls through
   /// to the next one.
   ///
@@ -528,9 +610,12 @@ class App {
     String name, {
     bool force = false,
     UnpubPackage? cached,
+    Upstream? only,
   }) async {
+    // Pinned and unpinned lookups can resolve differently; don't share them.
+    final key = only == null ? name : '${only.name}:$name';
     if (!force) {
-      final existing = _inflightMeta[name];
+      final existing = _inflightMeta[key];
       if (existing != null) {
         _upstreamDedupHits.inc(['metadata']);
         return existing;
@@ -538,13 +623,13 @@ class App {
     }
     _upstreamCacheMisses.inc(['metadata']);
     final sw = Stopwatch()..start();
-    final future = _doFetchAndCacheUpstreamPackage(name, cached);
-    _inflightMeta[name] = future;
+    final future = _doFetchAndCacheUpstreamPackage(name, cached, only);
+    _inflightMeta[key] = future;
     _inflightMetaGauge.inc();
     try {
       return await future;
     } finally {
-      _inflightMeta.remove(name);
+      _inflightMeta.remove(key);
       _inflightMetaGauge.dec();
       sw.stop();
       _upstreamFetchDuration
@@ -553,8 +638,8 @@ class App {
   }
 
   Future<UnpubPackage?> _doFetchAndCacheUpstreamPackage(
-      String name, UnpubPackage? cached) async {
-    final pinned = cached == null ? null : _mirrorSource(cached);
+      String name, UnpubPackage? cached, Upstream? only) async {
+    final pinned = only ?? (cached == null ? null : _mirrorSource(cached));
     for (final source in pinned != null ? [pinned] : _upstreams) {
       final url = source.resolve('api/packages/${Uri.encodeComponent(name)}');
       final res = await source.get(_upstreamClient, url,
@@ -1028,7 +1113,7 @@ class App {
       version = Uri.decodeComponent(version);
     } catch (_) {/* leave as-is */}
 
-    var package = await _resolvePackage(name);
+    var package = await _resolvePackage(name, pin: _pinOf(req));
     if (package == null) {
       return _okWithJson({'error': 'package not exists'});
     }
