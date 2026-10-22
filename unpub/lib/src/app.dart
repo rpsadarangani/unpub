@@ -995,8 +995,10 @@ class App {
     return _okWithJson({'data': data.toJson()});
   }
 
-  // Search upstream (pub.dev by default) and return its raw response so the
-  // UI can show packages we haven't cached yet. Reads only — no writes.
+  // Search upstreams for packages we haven't cached yet. Reads only — no
+  // writes. Private upstreams (Cloudsmith & co.) usually have no search API,
+  // so they are probed for an exact package-name match and listed first;
+  // the primary upstream (pub.dev) is searched by keyword.
   @Route.get('/webapi/upstream-search')
   Future<shelf.Response> upstreamSearch(shelf.Request req) async {
     final q = (req.requestedUri.queryParameters['q'] ?? '').trim();
@@ -1005,32 +1007,53 @@ class App {
         'data': {'packages': []}
       });
     }
+    final results = await Future.wait([
+      ...extraUpstreams.map((u) => _probeUpstreamName(u, q)),
+      _searchPrimaryUpstream(q),
+    ]);
+    final seen = <String>{};
+    final pkgs = [
+      for (final names in results)
+        for (final name in names)
+          if (seen.add(name)) {'name': name}
+    ];
+    return _okWithJson({
+      'data': {'packages': pkgs}
+    });
+  }
+
+  /// `[name]` when [source] has a package named like [q], else `[]`.
+  Future<List<String>> _probeUpstreamName(Upstream source, String q) async {
+    final name = q.toLowerCase().replaceAll(RegExp(r'[\s-]+'), '_');
+    if (!RegExp(r'^[a-z_][a-z0-9_]*$').hasMatch(name)) return const [];
+    try {
+      final res = await source.get(_upstreamClient,
+          source.resolve('api/packages/${Uri.encodeComponent(name)}'),
+          headers: {'accept': 'application/vnd.pub.v2+json'});
+      return res.statusCode == 200 ? [name] : const [];
+    } catch (e) {
+      print('unpub: probing $source for $name failed: $e');
+      return const [];
+    }
+  }
+
+  Future<List<String>> _searchPrimaryUpstream(String q) async {
     try {
       final primary = _upstreams.last;
       final url =
           primary.resolve('api/search').replace(queryParameters: {'q': q});
       final res = await primary.get(_upstreamClient, url);
-      if (res.statusCode != 200) {
-        return _okWithJson({
-          'data': {'packages': []}
-        });
-      }
+      if (res.statusCode != 200) return const [];
       final body = json.decode(res.body);
       final raw =
           ((body is Map ? body['packages'] : null) as List?) ?? const [];
-      // Normalise to {name, url} so the UI doesn't depend on pub.dev's exact shape.
-      final pkgs = raw
+      return raw
           .whereType<Map>()
-          .map((m) => {'name': (m['package'] ?? '').toString()})
-          .where((m) => (m['name'] as String).isNotEmpty)
+          .map((m) => (m['package'] ?? '').toString())
+          .where((name) => name.isNotEmpty)
           .toList();
-      return _okWithJson({
-        'data': {'packages': pkgs}
-      });
     } catch (_) {
-      return _okWithJson({
-        'data': {'packages': []}
-      });
+      return const [];
     }
   }
 
