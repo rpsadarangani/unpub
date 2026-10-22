@@ -6,6 +6,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ## [Unreleased]
 
+### Added
+- Private upstreams (`UNPUB_UPSTREAM_<n>_URL` + `_TOKEN` or `_USERNAME`/`_PASSWORD`; chart `extraUpstreams`), consulted before `UNPUB_UPSTREAM`; only a 404 falls through. Auth for the primary upstream via `UNPUB_UPSTREAM_TOKEN` / `_USERNAME` / `_PASSWORD`. Credentials never follow cross-host redirects.
+- `UNPUB_UPSTREAM_METADATA_TTL` (chart `upstreamMetadataTtlSeconds`, default 600s) and chart `publicUrl`.
+
+### Fixed
+- Mirrored package metadata was never refreshed, so new upstream versions never appeared; it is now re-checked per TTL and merged with the cache.
+- Upstream metadata persistence swallowed errors, wrote versions concurrently (random `latestVersion`) and re-appended versions on refresh (duplicates). Now only missing versions are written, in order, with errors logged; duplicates in existing data are hidden when serving.
+- Upstream URLs with a path prefix lost the prefix; tarballs are fetched from the upstream's `archive_url`.
+- npm advisories in `unpub/web` (vite 8.3.5, vue 3.5.44, postcss, nanoid, source-map-js, brace-expansion).
+
+### Changed
+- Runtime image is `cgr.dev/chainguard/glibc-dynamic` (nonroot, digest-pinned); chart sets `seccompProfile: RuntimeDefault` and `runAsGroup`.
+
 ## [0.1.0] - 2026-05-16
 
 First AWS-native release of this fork.
