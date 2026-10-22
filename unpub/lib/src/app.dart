@@ -18,6 +18,7 @@ import 'package:unpub/unpub_api/lib/models.dart';
 import 'package:unpub/src/meta_store.dart';
 import 'package:unpub/src/metrics.dart';
 import 'package:unpub/src/package_store.dart';
+import 'package:unpub/src/upstream.dart';
 import 'utils.dart';
 import 'static/index.html.dart' as index_html;
 import 'static/main.dart.js.dart' as main_dart_js;
@@ -60,8 +61,40 @@ class App {
   /// Defaults to `upstream@<host>`.
   final String? upstreamUploaderEmail;
 
+  /// Bearer token sent to [upstream] (private registries: Artifactory,
+  /// Cloudsmith, another unpub, …). Takes precedence over basic auth.
+  final String? upstreamToken;
+
+  /// Basic-auth credentials sent to [upstream] when [upstreamToken] is unset.
+  final String? upstreamUsername;
+  final String? upstreamPassword;
+
+  /// Additional (typically private) upstreams consulted before [upstream].
+  /// A package found in one of these is never looked up on [upstream], and
+  /// only a 404 falls through to the next one — this keeps private package
+  /// names from being shadowed by a public package (dependency confusion).
+  final List<Upstream> extraUpstreams;
+
+  /// [extraUpstreams] followed by the primary [upstream], in lookup order.
+  late final List<Upstream> _upstreams;
+
+  /// How long mirrored package metadata is served from the local store
+  /// before it is re-checked against [upstream] for new versions.
+  final Duration upstreamMetadataTtl;
+
   /// HTTP client used to fetch from [upstream]. Override in tests.
   final http.Client _upstreamClient;
+
+  /// Last successful upstream metadata refresh per package (this replica).
+  final Map<String, DateTime> _lastUpstreamRefresh = {};
+
+  /// `archive_url` advertised by upstream, keyed by `<name>@<version>`.
+  final Map<String, String> _upstreamArchiveUrls = {};
+
+  /// Versions this replica has queued or written to [metaStore], keyed by
+  /// package name, so a refresh that read the store before an earlier
+  /// background persist landed doesn't write them a second time.
+  final Map<String, Set<String>> _persistQueued = {};
 
   /// In-flight upstream metadata fetches keyed by package name — dedupes
   /// thundering herds so N concurrent first-fetches collapse to 1 upstream call.
@@ -94,9 +127,21 @@ class App {
     this.proxy_origin,
     this.cacheUpstream = false,
     this.upstreamUploaderEmail,
+    this.upstreamToken,
+    this.upstreamUsername,
+    this.upstreamPassword,
+    this.upstreamMetadataTtl = const Duration(minutes: 10),
+    this.extraUpstreams = const [],
     http.Client? upstreamClient,
     Metrics? metrics,
   }) : _upstreamClient = upstreamClient ?? http.Client() {
+    _upstreams = [
+      ...extraUpstreams,
+      Upstream(upstream,
+          token: upstreamToken,
+          username: upstreamUsername,
+          password: upstreamPassword),
+    ];
     this.metrics = metrics ?? Metrics();
     _registerMetrics();
   }
@@ -114,7 +159,8 @@ class App {
     );
     _upstreamCacheHits = metrics.counter(
       name: 'unpub_upstream_cache_hits_total',
-      help: 'Cache-on-miss requests where the package was already in the local store.',
+      help:
+          'Cache-on-miss requests where the package was already in the local store.',
       labelNames: ['kind'],
     );
     _upstreamCacheMisses = metrics.counter(
@@ -124,7 +170,8 @@ class App {
     );
     _upstreamDedupHits = metrics.counter(
       name: 'unpub_upstream_dedup_hits_total',
-      help: 'Concurrent fetches that were collapsed onto an in-flight upstream call.',
+      help:
+          'Concurrent fetches that were collapsed onto an in-flight upstream call.',
       labelNames: ['kind'],
     );
     _upstreamFetchDuration = metrics.histogram(
@@ -254,8 +301,8 @@ class App {
           res = await inner(req);
         } finally {
           sw.stop();
-          _httpRequestDuration.observe(
-              sw.elapsedMicroseconds / 1e6, [route, method]);
+          _httpRequestDuration
+              .observe(sw.elapsedMicroseconds / 1e6, [route, method]);
         }
         _httpRequestsTotal.inc([route, method, res.statusCode.toString()]);
         return res;
@@ -297,7 +344,8 @@ class App {
     var name = item.pubspec['name'] as String;
     var version = item.version;
     return {
-      'archive_url': _resolveUrl(req, '/packages/$name/versions/$version.tar.gz'),
+      'archive_url':
+          _resolveUrl(req, '/packages/$name/versions/$version.tar.gz'),
       'pubspec': item.pubspec,
       'version': version,
     };
@@ -313,28 +361,23 @@ class App {
 
   @Route.get('/api/packages/<name>')
   Future<shelf.Response> getVersions(shelf.Request req, String name) async {
-    var package = await metaStore.queryPackage(name);
-
+    var package = await _resolvePackage(name);
     if (package == null) {
-      if (cacheUpstream) {
-        package = await _fetchAndCacheUpstreamPackage(name);
-      }
-      if (package == null) {
-        return shelf.Response.found(
-            Uri.parse(upstream).resolve('/api/packages/$name').toString());
-      }
-    } else {
-      _upstreamCacheHits.inc(['metadata']);
+      return shelf.Response.found(
+          Uri.parse(upstream).resolve('/api/packages/$name').toString());
     }
 
-    package.versions.sort((a, b) {
+    // Older caches may hold the same version more than once (a forced
+    // refresh used to re-append every version); serve each one once.
+    final unique = <String, UnpubVersion>{
+      for (final v in package.versions) v.version: v,
+    }.values.toList();
+    unique.sort((a, b) {
       return semver.Version.prioritize(
           semver.Version.parse(a.version), semver.Version.parse(b.version));
     });
 
-    var versionMaps = package.versions
-        .map((item) => _versionToJson(item, req))
-        .toList();
+    var versionMaps = unique.map((item) => _versionToJson(item, req)).toList();
 
     return _okWithJson({
       'name': name,
@@ -353,10 +396,7 @@ class App {
       print(err);
     }
 
-    var package = await metaStore.queryPackage(name);
-    if (package == null && cacheUpstream) {
-      package = await _fetchAndCacheUpstreamPackage(name);
-    }
+    var package = await _resolvePackage(name);
     if (package == null) {
       return shelf.Response.found(Uri.parse(upstream)
           .resolve('/api/packages/$name/versions/$version')
@@ -383,12 +423,7 @@ class App {
       // Leave version as-is if decoding fails — handler below will 404.
     }
 
-    var package = await metaStore.queryPackage(name);
-
-    // Cache-on-miss: pull metadata from upstream so subsequent fetches see it.
-    if (package == null && cacheUpstream) {
-      package = await _fetchAndCacheUpstreamPackage(name);
-    }
+    var package = await _resolvePackage(name);
     if (package == null) {
       return shelf.Response.found(Uri.parse(upstream)
           .resolve('/packages/$name/versions/$version.tar.gz')
@@ -396,24 +431,28 @@ class App {
     }
 
     final hasVersion = package.versions.any((v) => v.version == version);
-    if (!hasVersion && cacheUpstream) {
+    if (!hasVersion && cacheUpstream && _mirrorSource(package) != null) {
       // Metadata is stale — refresh from upstream so we know the new version.
-      package = await _fetchAndCacheUpstreamPackage(name, force: true);
+      package = await _fetchAndCacheUpstreamPackage(name,
+              force: true, cached: package) ??
+          package;
     }
 
     // Pull from upstream when the tarball isn't in our store yet — covers
     // both first-touch and the case where metadata was cached previously
     // but the tarball itself is still missing.
-    if (cacheUpstream) {
+    final source = cacheUpstream ? _mirrorSource(package) : null;
+    if (source != null) {
       try {
         final present = await packageStore.exists(name, version);
         if (present) {
           _upstreamCacheHits.inc(['tarball']);
         } else {
-          await _fetchAndCacheUpstreamTarball(name, version);
+          await _fetchAndCacheUpstreamTarball(source, name, version);
         }
-      } catch (_) {
+      } catch (e) {
         // Falls back to packageStore.download which will surface the real error.
+        print('unpub: upstream tarball $name@$version from $source failed: $e');
       }
     }
 
@@ -433,15 +472,62 @@ class App {
     }
   }
 
-  /// Fetch a package's metadata from [upstream] and persist each version
-  /// through [metaStore]. Returns the freshly cached `UnpubPackage`, or
-  /// `null` when upstream has nothing.
+  /// Uploader recorded on packages mirrored from [source].
+  String _mirrorUploader(Upstream source) =>
+      identical(source, _upstreams.last) && upstreamUploaderEmail != null
+          ? upstreamUploaderEmail!
+          : source.uploaderEmail;
+
+  /// The upstream a cached [package] was mirrored from, or `null` when it was
+  /// published to this server directly.
+  Upstream? _mirrorSource(UnpubPackage package) {
+    final uploaders = package.uploaders ?? const <String>[];
+    return _upstreams
+        .firstWhereOrNull((u) => uploaders.contains(_mirrorUploader(u)));
+  }
+
+  /// Look a package up in the local store, falling back to (and refreshing
+  /// from) the upstreams when [cacheUpstream] is on.
+  ///
+  /// Mirrored packages are re-checked against their upstream once per
+  /// [upstreamMetadataTtl] so new upstream releases become visible; if the
+  /// upstream is unreachable the cached copy is served instead.
+  Future<UnpubPackage?> _resolvePackage(String name) async {
+    final cached = await metaStore.queryPackage(name);
+    if (!cacheUpstream) return cached;
+    if (cached == null) return _fetchAndCacheUpstreamPackage(name);
+
+    final source = _mirrorSource(cached);
+    final last = _lastUpstreamRefresh[name];
+    if (source == null ||
+        (last != null &&
+            DateTime.now().difference(last) < upstreamMetadataTtl)) {
+      _upstreamCacheHits.inc(['metadata']);
+      return cached;
+    }
+    try {
+      return await _fetchAndCacheUpstreamPackage(name, cached: cached) ??
+          cached;
+    } catch (e) {
+      print('unpub: refreshing $name from $source failed, serving cache: $e');
+      return cached;
+    }
+  }
+
+  /// Fetch a package's metadata from upstream and persist the versions the
+  /// local store is missing. Returns the cached and upstream versions merged,
+  /// or `null` when no upstream has the package.
+  ///
+  /// With [cached] set, only the upstream it was mirrored from is asked.
+  /// Otherwise [_upstreams] are tried in order and only a 404 falls through
+  /// to the next one.
   ///
   /// Dedupes concurrent calls for the same package name through
   /// [_inflightMeta] so cold-cache spikes only hit upstream once.
   Future<UnpubPackage?> _fetchAndCacheUpstreamPackage(
     String name, {
     bool force = false,
+    UnpubPackage? cached,
   }) async {
     if (!force) {
       final existing = _inflightMeta[name];
@@ -452,7 +538,7 @@ class App {
     }
     _upstreamCacheMisses.inc(['metadata']);
     final sw = Stopwatch()..start();
-    final future = _doFetchAndCacheUpstreamPackage(name);
+    final future = _doFetchAndCacheUpstreamPackage(name, cached);
     _inflightMeta[name] = future;
     _inflightMetaGauge.inc();
     try {
@@ -461,68 +547,99 @@ class App {
       _inflightMeta.remove(name);
       _inflightMetaGauge.dec();
       sw.stop();
-      _upstreamFetchDuration.observe(
-          sw.elapsedMicroseconds / 1e6, ['metadata']);
+      _upstreamFetchDuration
+          .observe(sw.elapsedMicroseconds / 1e6, ['metadata']);
     }
   }
 
-  Future<UnpubPackage?> _doFetchAndCacheUpstreamPackage(String name) async {
-    final url = Uri.parse(upstream).resolve('/api/packages/$name');
-    final res = await _upstreamClient.get(url);
-    if (res.statusCode == 404) return null;
-    if (res.statusCode ~/ 100 != 2) {
-      throw 'upstream $url returned ${res.statusCode}';
+  Future<UnpubPackage?> _doFetchAndCacheUpstreamPackage(
+      String name, UnpubPackage? cached) async {
+    final pinned = cached == null ? null : _mirrorSource(cached);
+    for (final source in pinned != null ? [pinned] : _upstreams) {
+      final url = source.resolve('api/packages/${Uri.encodeComponent(name)}');
+      final res = await source.get(_upstreamClient, url,
+          headers: {'accept': 'application/vnd.pub.v2+json'});
+      if (res.statusCode == 404) continue;
+      if (res.statusCode ~/ 100 != 2) {
+        throw 'upstream $url returned ${res.statusCode}';
+      }
+      return _mergeUpstreamPackage(name, source, res.body, cached);
     }
-    final body = json.decode(res.body) as Map<String, dynamic>;
-    final versionsRaw = (body['versions'] as List? ?? const [])
-        .cast<Map<String, dynamic>>();
-    final uploaderEmail = upstreamUploaderEmail ??
-        'upstream@${Uri.parse(upstream).host}';
+    return null;
+  }
 
-    // Build the in-memory UnpubPackage from the upstream payload so the
-    // caller can serve a response immediately without waiting for every
-    // version to land in the meta store. Persistence below is fire-and-forget.
-    final versions = versionsRaw
-        .map((v) => UnpubVersion(
-              v['version'] as String,
-              (v['pubspec'] as Map<String, dynamic>?) ??
-                  const <String, dynamic>{},
-              v['pubspec_yaml'] as String?,
-              uploaderEmail,
-              null,
-              null,
-              DateTime.now().toUtc(),
-            ))
-        .toList();
+  UnpubPackage _mergeUpstreamPackage(
+      String name, Upstream source, String body, UnpubPackage? cached) {
+    final versionsRaw =
+        ((json.decode(body) as Map)['versions'] as List? ?? const [])
+            .cast<Map<String, dynamic>>();
+    final uploaderEmail = _mirrorUploader(source);
     final now = DateTime.now().toUtc();
-    final synthetic = UnpubPackage(
-      name,
-      versions,
-      false,
-      [uploaderEmail],
-      now,
-      now,
-      0,
-    );
 
-    // Persist in the background — schedule on the next microtask so the
-    // caller can return before we kick off N concurrent meta-store writes.
-    Future.microtask(() => _persistUpstreamVersions(name, versions));
-    return synthetic;
+    final upstreamVersions = <UnpubVersion>[];
+    for (final v in versionsRaw) {
+      final version = v['version'] as String;
+      final archiveUrl = v['archive_url'] as String?;
+      if (archiveUrl != null) {
+        _upstreamArchiveUrls['$name@$version'] = archiveUrl;
+      }
+      upstreamVersions.add(UnpubVersion(
+        version,
+        (v['pubspec'] as Map<String, dynamic>?) ?? const <String, dynamic>{},
+        v['pubspec_yaml'] as String?,
+        uploaderEmail,
+        null,
+        null,
+        now,
+      ));
+    }
+
+    final queued = _persistQueued.putIfAbsent(name, () => {});
+    final known = {
+      for (final v in cached?.versions ?? <UnpubVersion>[]) v.version,
+      ...queued,
+    };
+    final missing = upstreamVersions
+        .where((v) => !known.contains(v.version))
+        .toList()
+      ..sort((a, b) => semver.Version.prioritize(
+          semver.Version.parse(a.version), semver.Version.parse(b.version)));
+    final merged = <String, UnpubVersion>{
+      for (final v in cached?.versions ?? <UnpubVersion>[]) v.version: v,
+      for (final v in upstreamVersions) v.version: v,
+    }.values.toList();
+
+    _lastUpstreamRefresh[name] = DateTime.now();
+    // Persist in the background so the caller can answer right away; the
+    // response is built from the merged in-memory view.
+    if (missing.isNotEmpty) {
+      queued.addAll(missing.map((v) => v.version));
+      Future.microtask(() => _persistUpstreamVersions(name, missing));
+    }
+    return UnpubPackage(
+      name,
+      merged,
+      cached?.private ?? false,
+      cached?.uploaders ?? [uploaderEmail],
+      cached?.createdAt ?? now,
+      now,
+      cached?.download ?? 0,
+    );
   }
 
+  /// Writes [versions] one at a time in ascending order, so the store's
+  /// "latest version" ends up on the newest one rather than whichever
+  /// concurrent write landed last.
   Future<void> _persistUpstreamVersions(
       String name, List<UnpubVersion> versions) async {
-    const concurrency = 8;
-    var i = 0;
-    while (i < versions.length) {
-      final chunk = versions.skip(i).take(concurrency).toList();
-      await Future.wait(chunk.map((v) async {
-        try {
-          await metaStore.addVersion(name, v);
-        } catch (_) {/* race / duplicate — ignore */}
-      }));
-      i += concurrency;
+    for (final v in versions) {
+      try {
+        await metaStore.addVersion(name, v);
+      } catch (e) {
+        print('unpub: caching $name@${v.version} metadata failed: $e');
+        // Let a later refresh retry it.
+        _persistQueued[name]?.remove(v.version);
+      }
     }
   }
 
@@ -530,7 +647,7 @@ class App {
   /// it already exists locally. Concurrent calls for the same version are
   /// deduped through [_inflightTarballs].
   Future<List<int>> _fetchAndCacheUpstreamTarball(
-      String name, String version) async {
+      Upstream source, String name, String version) async {
     final key = '$name@$version';
     final existing = _inflightTarballs[key];
     if (existing != null) {
@@ -539,7 +656,7 @@ class App {
     }
     _upstreamCacheMisses.inc(['tarball']);
     final sw = Stopwatch()..start();
-    final future = _doFetchAndCacheUpstreamTarball(name, version);
+    final future = _doFetchAndCacheUpstreamTarball(source, name, version);
     _inflightTarballs[key] = future;
     _inflightTarballGauge.inc();
     try {
@@ -548,16 +665,20 @@ class App {
       _inflightTarballs.remove(key);
       _inflightTarballGauge.dec();
       sw.stop();
-      _upstreamFetchDuration.observe(
-          sw.elapsedMicroseconds / 1e6, ['tarball']);
+      _upstreamFetchDuration.observe(sw.elapsedMicroseconds / 1e6, ['tarball']);
     }
   }
 
   Future<List<int>> _doFetchAndCacheUpstreamTarball(
-      String name, String version) async {
-    final url = Uri.parse(upstream)
-        .resolve('/api/archives/$name-$version.tar.gz');
-    final res = await _upstreamClient.get(url);
+      Upstream source, String name, String version) async {
+    // Prefer the archive_url upstream advertised (Cloudsmith & co. don't use
+    // pub.dev's layout); fall back to the standard hosted-repository path.
+    final advertised = _upstreamArchiveUrls['$name@$version'];
+    final url = advertised != null
+        ? Uri.parse(advertised)
+        : source.resolve('packages/${Uri.encodeComponent(name)}/versions/'
+            '${Uri.encodeComponent(version)}.tar.gz');
+    final res = await source.get(_upstreamClient, url);
     if (res.statusCode ~/ 100 != 2) {
       throw 'upstream tarball $url returned ${res.statusCode}';
     }
@@ -568,8 +689,7 @@ class App {
   @Route.get('/api/packages/versions/new')
   Future<shelf.Response> getUploadUrl(shelf.Request req) async {
     return _okWithJson({
-      'url': _resolveUrl(req, '/api/packages/versions/newUpload')
-          .toString(),
+      'url': _resolveUrl(req, '/api/packages/versions/newUpload').toString(),
       'fields': {},
     });
   }
@@ -692,9 +812,11 @@ class App {
       await metaStore.addVersion(name, unpubVersion);
 
       // TODO: Upload docs
-      return shelf.Response.found(_resolveUrl(req, '/api/packages/versions/newUploadFinish'));
+      return shelf.Response.found(
+          _resolveUrl(req, '/api/packages/versions/newUploadFinish'));
     } catch (err) {
-      return shelf.Response.found(_resolveUrl(req, '/api/packages/versions/newUploadFinish?error=$err'));
+      return shelf.Response.found(_resolveUrl(
+          req, '/api/packages/versions/newUploadFinish?error=$err'));
     }
   }
 
@@ -794,26 +916,36 @@ class App {
   Future<shelf.Response> upstreamSearch(shelf.Request req) async {
     final q = (req.requestedUri.queryParameters['q'] ?? '').trim();
     if (q.isEmpty) {
-      return _okWithJson({'data': {'packages': []}});
+      return _okWithJson({
+        'data': {'packages': []}
+      });
     }
     try {
-      final url = Uri.parse(upstream).resolve('/api/search').replace(
-          queryParameters: {'q': q});
-      final res = await _upstreamClient.get(url);
+      final primary = _upstreams.last;
+      final url =
+          primary.resolve('api/search').replace(queryParameters: {'q': q});
+      final res = await primary.get(_upstreamClient, url);
       if (res.statusCode != 200) {
-        return _okWithJson({'data': {'packages': []}});
+        return _okWithJson({
+          'data': {'packages': []}
+        });
       }
       final body = json.decode(res.body);
-      final raw = ((body is Map ? body['packages'] : null) as List?) ?? const [];
+      final raw =
+          ((body is Map ? body['packages'] : null) as List?) ?? const [];
       // Normalise to {name, url} so the UI doesn't depend on pub.dev's exact shape.
       final pkgs = raw
           .whereType<Map>()
           .map((m) => {'name': (m['package'] ?? '').toString()})
           .where((m) => (m['name'] as String).isNotEmpty)
           .toList();
-      return _okWithJson({'data': {'packages': pkgs}});
+      return _okWithJson({
+        'data': {'packages': pkgs}
+      });
     } catch (_) {
-      return _okWithJson({'data': {'packages': []}});
+      return _okWithJson({
+        'data': {'packages': []}
+      });
     }
   }
 
@@ -821,22 +953,37 @@ class App {
   // button). Pulls metadata, persists every version, then pre-fetches the
   // latest tarball into S3 so the next `dart pub get` is a warm hit.
   @Route.post('/webapi/upstream-cache/<name>')
-  Future<shelf.Response> upstreamCacheNow(shelf.Request req, String name) async {
+  Future<shelf.Response> upstreamCacheNow(
+      shelf.Request req, String name) async {
     if (!cacheUpstream) {
       return _badRequest('cacheUpstream is disabled on this server');
     }
     try {
-      final pkg = await _fetchAndCacheUpstreamPackage(name, force: true);
-      if (pkg == null) {
+      final cached = await metaStore.queryPackage(name);
+      if (cached != null && _mirrorSource(cached) == null) {
+        return _badRequest('$name is published here, not mirrored');
+      }
+      final pkg = await _fetchAndCacheUpstreamPackage(name,
+          force: true, cached: cached);
+      final source = pkg == null ? null : _mirrorSource(pkg);
+      if (pkg == null || source == null) {
         return _badRequest('upstream did not return $name',
             status: HttpStatus.notFound);
       }
       String? latest;
       if (pkg.versions.isNotEmpty) {
-        latest = pkg.versions.last.version;
+        latest = pkg.versions
+            .map((v) => semver.Version.parse(v.version))
+            .reduce((a, b) => semver.Version.prioritize(a, b) >= 0 ? a : b)
+            .toString();
         try {
-          await _fetchAndCacheUpstreamTarball(name, latest);
-        } catch (_) {/* best-effort; the on-demand path will retry */}
+          if (!await packageStore.exists(name, latest)) {
+            await _fetchAndCacheUpstreamTarball(source, name, latest);
+          }
+        } catch (e) {
+          // Best-effort; the on-demand download path will retry.
+          print('unpub: pre-fetching $name@$latest failed: $e');
+        }
       }
       return _okWithJson({
         'data': {
@@ -881,10 +1028,7 @@ class App {
       version = Uri.decodeComponent(version);
     } catch (_) {/* leave as-is */}
 
-    var package = await metaStore.queryPackage(name);
-    if (package == null && cacheUpstream) {
-      package = await _fetchAndCacheUpstreamPackage(name);
-    }
+    var package = await _resolvePackage(name);
     if (package == null) {
       return _okWithJson({'error': 'package not exists'});
     }
@@ -896,8 +1040,11 @@ class App {
       packageVersion =
           package.versions.firstWhereOrNull((item) => item.version == version);
       // Metadata may be stale (we cached an older snapshot); refresh once.
-      if (packageVersion == null && cacheUpstream) {
-        package = await _fetchAndCacheUpstreamPackage(name, force: true);
+      if (packageVersion == null &&
+          cacheUpstream &&
+          _mirrorSource(package) != null) {
+        package = await _fetchAndCacheUpstreamPackage(name,
+            force: true, cached: package);
         if (package != null) {
           packageVersion = package.versions
               .firstWhereOrNull((item) => item.version == version);
@@ -984,8 +1131,8 @@ class App {
     }
     final name = stripped.substring(0, dash);
     final version = stripped.substring(dash + 1);
-    return shelf.Response.found(_resolveUrl(
-            req, '/packages/$name/versions/${Uri.encodeComponent(version)}.tar.gz')
+    return shelf.Response.found(_resolveUrl(req,
+            '/packages/$name/versions/${Uri.encodeComponent(version)}.tar.gz')
         .toString());
   }
 
