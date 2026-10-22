@@ -471,10 +471,21 @@ dependencies:
 ```
 
 pub treats the hosted URL as part of a package's identity, so a package can
-come from only one URL in a dependency graph. Pin private packages; don't
-pin a public package (e.g. `path` to `/u/pub/`) that something else also
-pulls in transitively from the root URL, or version solving fails with
-"requires path from hosted on …".
+come from only one URL in a dependency graph. Pinning a package under
+`dependencies` that something else also pulls in transitively from the root
+URL fails version solving with "requires path from hosted on …". To pin such
+a package, use `dependency_overrides`, which replaces its source everywhere
+in the graph:
+
+```yaml
+dependency_overrides:
+  path:
+    hosted: https://unpub.example.internal/u/pub/
+    version: ^1.9.0
+```
+
+Overrides only apply to the root package (your app), not to packages that
+depend on yours.
 
 Add the private host to the egress allowlist below (for Cloudsmith:
 `dart.cloudsmith.io` and `dl.cloudsmith.io`).
