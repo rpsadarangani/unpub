@@ -35,22 +35,30 @@ COPY . .
 COPY --from=web /repo/unpub/lib/src/static/index.html.dart \
                 unpub/lib/src/static/index.html.dart
 
-RUN cd unpub && dart pub get && \
-    cd ../unpub_aws && dart pub get
+WORKDIR /src/unpub
+RUN dart pub get
+WORKDIR /src/unpub_aws
+RUN dart pub get
+WORKDIR /src
 
 RUN mkdir -p /out && dart compile exe unpub_aws/example/server.dart -o /out/unpub-server
 
 # ---------- runtime ----------
-FROM debian:bookworm-slim
+# Chainguard glibc-dynamic: glibc + CA certs only, nonroot (65532), no shell
+# or package manager. dumb-init comes from Wolfi so it links the same glibc.
+# Digests are bumped by Dependabot (docker ecosystem).
+FROM cgr.dev/chainguard/wolfi-base:latest@sha256:bc76fa39ddd1482dd56a761b3331e03ba8f0e093ebb525618a56d014b480da88 AS init
+RUN apk add --no-cache dumb-init
 
-RUN apt-get update && \
-    apt-get install -y --no-install-recommends ca-certificates dumb-init && \
-    rm -rf /var/lib/apt/lists/*
+FROM cgr.dev/chainguard/glibc-dynamic:latest@sha256:3f1283dc2a6a48c25cd2e1c7730a871b19b721975240e108e0d6a73b555a3a20
 
+COPY --from=init /usr/bin/dumb-init /usr/bin/dumb-init
 COPY --from=builder /out/unpub-server /usr/local/bin/unpub-server
 
 ENV UNPUB_PORT=4000
 EXPOSE 4000
+
+USER 65532:65532
 
 ENTRYPOINT ["/usr/bin/dumb-init", "--"]
 CMD ["/usr/local/bin/unpub-server"]

@@ -22,6 +22,22 @@ resources:
 # (pub.dev by default) and persist into S3 / metadata store.
 cacheUpstream: true
 upstream: "https://pub.dev"
+# How long mirrored package metadata is served from the store before it is
+# re-checked against its upstream for new versions.
+upstreamMetadataTtlSeconds: 600
+
+# Private upstreams consulted (in order) before `upstream`. Only a 404 falls
+# through to the next one. Credentials never go in values: map them from
+# your secret store via externalSecret.data using the env var names
+#   UNPUB_UPSTREAM_<n>_TOKEN                      (Bearer), or
+#   UNPUB_UPSTREAM_<n>_USERNAME / _PASSWORD       (Basic)
+# where <n> is the 1-based position in this list.
+extraUpstreams: []
+# - url: https://dart.cloudsmith.io/<org>/<repo>/
+
+# Public HTTPS origin clients use. Required behind a TLS-terminating
+# ingress so `dart pub publish` gets an https upload URL.
+publicUrl: ""
 
 aws:
   region: ap-south-1
@@ -55,6 +71,10 @@ externalSecret:
   #   remoteRef:
   #     key: /non-prod/infra/unpub-aws-creds
   #     property: access_key_id
+  # - envVar: UNPUB_UPSTREAM_1_TOKEN
+  #   remoteRef:
+  #     key: /non-prod/infra/unpub-upstreams
+  #     property: cloudsmith_token
 
 env: {}
 # UNPUB_OVERRIDE_UPLOADER: ""
@@ -120,11 +140,14 @@ affinity:
 
 securityContext:
   fsGroup: 65532
+  seccompProfile:
+    type: RuntimeDefault
 
 containerSecurityContext:
   readOnlyRootFilesystem: true
   runAsNonRoot: true
   runAsUser: 65532
+  runAsGroup: 65532
   allowPrivilegeEscalation: false
   capabilities:
     drop: ["ALL"]

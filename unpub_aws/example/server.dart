@@ -64,14 +64,22 @@ Future<void> main(List<String> args) async {
     overrideUploaderEmail: env['UNPUB_OVERRIDE_UPLOADER'],
     cacheUpstream: env['UNPUB_CACHE_UPSTREAM'] == 'true',
     upstream: env['UNPUB_UPSTREAM'] ?? 'https://pub.dev',
-    proxy_origin: publicUrl != null && publicUrl.isNotEmpty
-        ? Uri.parse(publicUrl)
-        : null,
+    upstreamToken: env['UNPUB_UPSTREAM_TOKEN'],
+    upstreamUsername: env['UNPUB_UPSTREAM_USERNAME'],
+    upstreamPassword: env['UNPUB_UPSTREAM_PASSWORD'],
+    upstreamMetadataTtl: Duration(
+        seconds: int.parse(env['UNPUB_UPSTREAM_METADATA_TTL'] ?? '600')),
+    extraUpstreams: _extraUpstreams(env),
+    proxy_origin:
+        publicUrl != null && publicUrl.isNotEmpty ? Uri.parse(publicUrl) : null,
   );
 
   final server = await app.serve('0.0.0.0', port);
-  stdout.writeln(
-      'unpub mode=$mode region=$region bucket=$bucket '
+  stdout.writeln('unpub mode=$mode region=$region bucket=$bucket '
+      'upstreams=${[
+    ...app.extraUpstreams.map((u) => u.toString()),
+    app.upstream
+  ]} '
       'cacheUpstream=${env["UNPUB_CACHE_UPSTREAM"] == "true"} '
       'http://${server.address.host}:${server.port}');
 }
@@ -84,4 +92,22 @@ String? _argValue(List<String> args, String flag) {
     }
   }
   return null;
+}
+
+/// Private upstreams from `UNPUB_UPSTREAM_<n>_URL` (+ `_TOKEN`, or
+/// `_USERNAME` / `_PASSWORD`), n = 1, 2, … until the first gap. They are
+/// consulted, in order, before `UNPUB_UPSTREAM`.
+List<unpub.Upstream> _extraUpstreams(Map<String, String> env) {
+  final upstreams = <unpub.Upstream>[];
+  for (var n = 1;; n++) {
+    final url = env['UNPUB_UPSTREAM_${n}_URL'];
+    if (url == null || url.isEmpty) break;
+    upstreams.add(unpub.Upstream(
+      url,
+      token: env['UNPUB_UPSTREAM_${n}_TOKEN'],
+      username: env['UNPUB_UPSTREAM_${n}_USERNAME'],
+      password: env['UNPUB_UPSTREAM_${n}_PASSWORD'],
+    ));
+  }
+  return upstreams;
 }

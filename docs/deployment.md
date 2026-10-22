@@ -240,7 +240,7 @@ For `s3only` mode, drop the entire DynamoDB statement.
 ## 3. Install with Helm
 
 ```sh
-helm install unpub oci://ghcr.io/rpsadarangani/charts/unpub --version 0.2.2 \
+helm install unpub oci://ghcr.io/rpsadarangani/charts/unpub --version <chart-version> \
   -n devtools --create-namespace \
   --set aws.region=<region> \
   --set aws.bucket=unpub-packages \
@@ -256,7 +256,7 @@ Minimal `values.yaml`:
 ```yaml
 image:
   repository: ghcr.io/rpsadarangani/unpub
-  tag: "v0.2.2"
+  tag: "v<version>"
 
 fullnameOverride: unpub
 mode: dynamo
@@ -401,7 +401,12 @@ All settable through Helm values (see `charts/unpub/values.yaml`) or directly vi
 | `UNPUB_TABLE` | `unpub-packages` | metadata DDB table (dynamo mode) |
 | `UNPUB_STATS_TABLE` | `unpub-stats` | daily-stats DDB table |
 | `UNPUB_CACHE_UPSTREAM` | `false` | enable Athens-style pull-through cache |
-| `UNPUB_UPSTREAM` | `https://pub.dev` | upstream registry |
+| `UNPUB_UPSTREAM` | `https://pub.dev` | primary upstream registry |
+| `UNPUB_UPSTREAM_TOKEN` / `UNPUB_UPSTREAM_USERNAME` + `UNPUB_UPSTREAM_PASSWORD` | unset | Bearer or Basic auth for the primary upstream |
+| `UNPUB_UPSTREAM_<n>_URL` | unset | private upstream `n` (1, 2, …), consulted before `UNPUB_UPSTREAM` |
+| `UNPUB_UPSTREAM_<n>_TOKEN` / `_USERNAME` + `_PASSWORD` | unset | Bearer or Basic auth for private upstream `n` |
+| `UNPUB_UPSTREAM_METADATA_TTL` | `600` | seconds before mirrored metadata is re-checked upstream for new versions |
+| `UNPUB_PUBLIC_URL` | unset | public HTTPS origin; required behind TLS-terminating ingress for `dart pub publish` |
 | `UNPUB_OVERRIDE_UPLOADER` | unset | skip OAuth; record this email as uploader (dev/internal only) |
 | `UNPUB_PORT` | `4000` | HTTP listen port |
 | `AWS_REGION` / `AWS_DEFAULT_REGION` | unset (required) | AWS region |
@@ -416,6 +421,38 @@ All settable through Helm values (see `charts/unpub/values.yaml`) or directly vi
 - Route labels are templates (`/api/packages/<name>` not the concrete name) so cardinality stays bounded.
 - `unpub_uploads_total` / `unpub_downloads_total` are unlabelled by design — per-package telemetry lives in the `unpub-stats` DynamoDB table (`DynamoMetaStore.queryDailyDownloads()`).
 - VMServiceScrape (`vmServiceScrape.enabled=true`) for clusters running the VictoriaMetrics Operator, otherwise pod-annotation scraping works for plain Prometheus.
+
+### Private upstreams (Cloudsmith, Artifactory, …)
+
+Mirror a private pub repository alongside pub.dev. Lookups for a package not
+yet cached try each private upstream in order, then `upstream`. Only a 404
+falls through, so a private name is never resolved from pub.dev while the
+private repo is erroring (dependency-confusion guard). Once mirrored, a
+package is only ever refreshed from the upstream it came from.
+
+```yaml
+extraUpstreams:
+  - url: https://dart.cloudsmith.io/<org>/<repo>/
+
+externalSecret:
+  enabled: true
+  data:
+    - envVar: UNPUB_UPSTREAM_1_TOKEN        # or _USERNAME / _PASSWORD
+      remoteRef:
+        key: /<env>/infra/unpub-upstreams
+        property: cloudsmith_token
+```
+
+Credentials are sent only to the upstream's own origin, never across
+redirects (e.g. Cloudsmith's signed `dl.cloudsmith.io` URLs). Tarballs are
+fetched from the `archive_url` the upstream advertises.
+
+> unpub has no read authentication: anything mirrored from a private
+> upstream is downloadable by everyone who can reach unpub. Keep it on an
+> internal-only ingress.
+
+Add the private host to the egress allowlist below (for Cloudsmith:
+`dart.cloudsmith.io` and `dl.cloudsmith.io`).
 
 ### Outbound firewall
 
@@ -452,7 +489,7 @@ Every Git tag matching `v*` rebuilds and pushes:
 Bump the chart with:
 
 ```sh
-helm upgrade unpub oci://ghcr.io/rpsadarangani/charts/unpub --version 0.2.2 \
+helm upgrade unpub oci://ghcr.io/rpsadarangani/charts/unpub --version <chart-version> \
   -n devtools --reuse-values
 ```
 

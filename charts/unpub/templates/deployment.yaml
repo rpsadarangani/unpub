@@ -46,6 +46,16 @@ spec:
               value: {{ ternary "true" "false" .Values.cacheUpstream | quote }}
             - name: UNPUB_UPSTREAM
               value: {{ .Values.upstream | quote }}
+            - name: UNPUB_UPSTREAM_METADATA_TTL
+              value: {{ .Values.upstreamMetadataTtlSeconds | quote }}
+            {{- range $i, $u := .Values.extraUpstreams }}
+            - name: UNPUB_UPSTREAM_{{ add1 $i }}_URL
+              value: {{ $u.url | quote }}
+            {{- end }}
+            {{- if .Values.publicUrl }}
+            - name: UNPUB_PUBLIC_URL
+              value: {{ .Values.publicUrl | quote }}
+            {{- end }}
             - name: AWS_DEFAULT_REGION
               value: {{ .Values.aws.region | quote }}
             - name: UNPUB_BUCKET
