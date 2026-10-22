@@ -241,4 +241,50 @@ void main() {
         'Basic ${base64.encode(utf8.encode('u:p'))}');
     expect(u.uploaderEmail, 'upstream@repo.example/dart');
   });
+
+  Future<List<String>> searchNames(App a, String q) async {
+    final res = await a.upstreamSearch(
+        get('/webapi/upstream-search?q=${Uri.encodeQueryComponent(q)}'));
+    final body = json.decode(await res.readAsString()) as Map;
+    return [
+      for (final p in body['data']['packages'] as List) p['name'] as String
+    ];
+  }
+
+  test('upstream search lists exact-name hits from private upstreams first',
+      () async {
+    final a = app((req) async {
+      final url = req.url.toString();
+      if (url == '$cs/api/packages/oa_flights_sdk') {
+        return http.Response(meta(cs, 'oa_flights_sdk', ['1.0.0']), 200);
+      }
+      if (req.url.host == 'pub.dev' && req.url.path == '/api/search') {
+        return http.Response(
+            json.encode({
+              'packages': [
+                {'package': 'oa_flights_sdk'},
+                {'package': 'flights'},
+              ]
+            }),
+            200);
+      }
+      return http.Response('', 404);
+    });
+
+    expect(await searchNames(a, ' OA-Flights SDK '), [
+      'oa_flights_sdk',
+      'flights',
+    ]);
+    final probe = calls.firstWhere((c) => c.url.host == 'dart.cloudsmith.io');
+    expect(probe.headers['authorization'], 'Bearer s3cret');
+  });
+
+  test('upstream search skips the name probe for non-package queries',
+      () async {
+    final a = app((req) async => req.url.host == 'pub.dev'
+        ? http.Response(json.encode({'packages': []}), 200)
+        : http.Response('', 404));
+    expect(await searchNames(a, 'flight search!'), isEmpty);
+    expect(calls.map((c) => c.url.host), ['pub.dev']);
+  });
 }
