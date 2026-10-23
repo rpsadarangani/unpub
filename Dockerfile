@@ -4,7 +4,9 @@
 # Build the Vite + Vue 3 + TypeScript UI and bake it into a Dart constant
 # the server can serve at `/`. `vite-plugin-singlefile` inlines all JS/CSS
 # into one index.html, then `build-to-dart.mjs` wraps it as a Dart string.
-FROM node:20-bookworm-slim AS web
+# Node 24 LTS: Node 20 is EOL and misses the Oct 2026 security release
+# (CVE-2026-111497 et al.). Digest bumped by Dependabot (docker ecosystem).
+FROM node:24.22.1-bookworm-slim@sha256:55fb5f5a527ea2c5c4a95f963e48ef90aa38c7b346054fdc8ee9957a2b55d205 AS web
 
 WORKDIR /repo
 
